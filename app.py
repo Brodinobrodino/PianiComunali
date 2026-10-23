@@ -635,8 +635,8 @@ with tab_visualizza:
                         except Exception as e_open:
                             st.error(f"Impossibile aprire la cartella: {e_open}")
 
-     except Exception as e:
-         st.error(f"Errore durante il caricamento della vista integrata dei piani: {e}")
+    except Exception as e:
+        st.error(f"Errore durante il caricamento della vista integrata dei piani: {e}")
 
     st.markdown("---")
     with st.expander("🔧 Tabelle di base (solo per verifica dati)"):
