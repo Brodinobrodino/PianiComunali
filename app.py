@@ -22,6 +22,17 @@ DB_USER = os.getenv("DB_USER", "peser")
 DB_PASS = os.getenv("DB_PASS", "password")  # Cambia subito questo valore
 DB_PORT = int(os.getenv("DB_PORT", "5432"))
 
+# -----------------------------------------------------------
+# NOMI TABELLE (minuscolo per corrispondere al DB PostgreSQL)
+# -----------------------------------------------------------
+TABLE_PS_T_ANAGRAFICA_PC = "ps_t_anagrafica_pc"
+TABLE_PS_D_STATO_PIANO = "ps_d_stato_piano"
+TABLE_PS_D_TIPO_PIANO = "ps_d_tipo_piano"
+TABLE_PS_D_TIPO_DELIBERA = "ps_d_tipo_delibera"
+TABLE_PS_GEO_COMUNE = "ps_geo_comune"
+TABLE_PS_R_PIANO_COMUNE = "ps_r_piano_comune"
+TABLE_PS_R_TM_TP = "ps_r_tm_tp"
+
 
 # -----------------------------------------------------------
 # FUNZIONI DI SERVIZIO PER IL DATABASE
@@ -44,7 +55,9 @@ def load_table(table_name: str, limit: int = 1000) -> pd.DataFrame:
     conn = None
     try:
         conn = get_connection()
-        query = f'SELECT * FROM "{table_name}" LIMIT %s'
+        # Il nome tabella viene passato in minuscolo e non viene quotato,
+        # così PostgreSQL lo interpreta come identificatore non sensibile al case.
+        query = f"SELECT * FROM {table_name} LIMIT %s"
         df = pd.read_sql_query(query, conn, params=(limit,))
         return df
     finally:
@@ -62,7 +75,8 @@ def get_decodifica_options(table_name: str, id_column: str, desc_column: str) ->
     conn = None
     try:
         conn = get_connection()
-        query = f'SELECT "{id_column}", "{desc_column}" FROM "{table_name}" ORDER BY "{desc_column}"'
+        # Tabella in minuscolo non quotata, colonne quotate per preservare il nome esatto
+        query = f'SELECT "{id_column}", "{desc_column}" FROM {table_name} ORDER BY "{desc_column}"'
         df = pd.read_sql_query(query, conn)
         return df
     finally:
@@ -83,16 +97,16 @@ def insert_piano_comunale(
     ⚠️ Adatta nomi tabella/colonne ai tuoi schemi REALI.
 
     Assunzioni usate qui (da verificare sul tuo DB):
-    - Tabella principale: "Ps_t_anagrafica_pc"
+    - Tabella principale: "ps_t_anagrafica_pc" (vedi costante TABLE_PS_T_ANAGRAFICA_PC)
         * id_piano           SERIAL PK
         * descrizione_piano  TEXT
-        * id_stato_piano     INT FK -> Ps_d_stato_piano
-        * id_tipo_piano      INT FK -> Ps_d_tipo_piano
-        * id_tipo_delibera   INT FK -> Ps_d_tipo_delibera
+        * id_stato_piano     INT FK -> ps_d_stato_piano
+        * id_tipo_piano      INT FK -> ps_d_tipo_piano
+        * id_tipo_delibera   INT FK -> ps_d_tipo_delibera
         * note               TEXT (opzionale)
-    - Tabella relazione piano-comune: "Ps_r_piano_comune"
-        * id_piano   INT FK -> Ps_t_anagrafica_pc
-        * id_comune  INT FK -> Ps_geo_comune
+    - Tabella relazione piano-comune: "ps_r_piano_comune" (vedi costante TABLE_PS_R_PIANO_COMUNE)
+        * id_piano   INT FK -> ps_t_anagrafica_pc
+        * id_comune  INT FK -> ps_geo_comune
     """
 
     conn = None
@@ -103,9 +117,9 @@ def insert_piano_comunale(
         cursor = conn.cursor()
 
         insert_piano_query = (
-            'INSERT INTO "Ps_t_anagrafica_pc" '
-            '(descrizione_piano, id_stato_piano, id_tipo_piano, id_tipo_delibera, note) '
-            'VALUES (%s, %s, %s, %s, %s) RETURNING id_piano;'
+            f"INSERT INTO {TABLE_PS_T_ANAGRAFICA_PC} "
+            "(descrizione_piano, id_stato_piano, id_tipo_piano, id_tipo_delibera, note) "
+            "VALUES (%s, %s, %s, %s, %s) RETURNING id_piano;"
         )
 
         cursor.execute(
@@ -122,7 +136,7 @@ def insert_piano_comunale(
         id_piano = cursor.fetchone()[0]
 
         insert_rel_query = (
-            'INSERT INTO "Ps_r_piano_comune" (id_piano, id_comune) '
+            f"INSERT INTO {TABLE_PS_R_PIANO_COMUNE} (id_piano, id_comune) "
             "VALUES (%s, %s);"
         )
         cursor.execute(insert_rel_query, (id_piano, id_comune))
@@ -140,14 +154,14 @@ def get_comuni() -> pd.DataFrame:
     """Ritorna elenco dei comuni.
 
     Assunzioni (adatta ai tuoi schemi):
-    - Tabella: "Ps_geo_comune"
+    - Tabella: "ps_geo_comune" (vedi costante TABLE_PS_GEO_COMUNE)
     - Colonne usate: id_comune (PK), nome_comune (descrizione)
     """
 
     conn = None
     try:
         conn = get_connection()
-        query = 'SELECT id_comune, nome_comune FROM "Ps_geo_comune" ORDER BY nome_comune'
+        query = f"SELECT id_comune, nome_comune FROM {TABLE_PS_GEO_COMUNE} ORDER BY nome_comune"
         df = pd.read_sql_query(query, conn)
         return df
     finally:
@@ -162,10 +176,10 @@ def get_last_piani(limit: int = 50) -> pd.DataFrame:
     try:
         conn = get_connection()
         query = (
-            'SELECT p.id_piano, p.descrizione_piano, p.id_stato_piano, '
-            'p.id_tipo_piano, p.id_tipo_delibera, p.note '
-            'FROM "Ps_t_anagrafica_pc" p '
-            'ORDER BY p.id_piano DESC LIMIT %s'
+            "SELECT p.id_piano, p.descrizione_piano, p.id_stato_piano, "
+            "p.id_tipo_piano, p.id_tipo_delibera, p.note "
+            f"FROM {TABLE_PS_T_ANAGRAFICA_PC} p "
+            "ORDER BY p.id_piano DESC LIMIT %s"
         )
         df = pd.read_sql_query(query, conn, params=(limit,))
         return df
@@ -182,7 +196,8 @@ def get_table_columns(table_name: str) -> list[str]:
     try:
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute(f'SELECT * FROM "{table_name}" LIMIT 0')
+        # Il nome tabella è in minuscolo e non viene quotato per allinearsi agli schemi del DB
+        cursor.execute(f"SELECT * FROM {table_name} LIMIT 0")
         return [desc[0] for desc in cursor.description]
     finally:
         if cursor is not None:
@@ -192,16 +207,31 @@ def get_table_columns(table_name: str) -> list[str]:
 
 
 # -----------------------------------------------------------
+# DIAGNOSTICA CONNESSIONE DATABASE
+# -----------------------------------------------------------
+with st.sidebar:
+    st.subheader("Stato database")
+    try:
+        conn = get_connection()
+        with conn:
+            st.success(
+                f"Connesso a {DB_NAME} su {DB_HOST}:{DB_PORT} come {DB_USER}"
+            )
+    except Exception as e:
+        st.error(f"Errore di connessione al database: {e}")
+
+
+# -----------------------------------------------------------
 # UI PRINCIPALE - TAB
 # -----------------------------------------------------------
 TAB_LABELS = {
-    "Ps_t_anagrafica_pc": "Anagrafica piani comunali",
-    "Ps_d_stato_piano": "Decodifica stato piano",
-    "Ps_d_tipo_piano": "Decodifica tipo piano",
-    "Ps_d_tipo_delibera": "Decodifica tipo delibera",
-    "Ps_geo_comune": "Elenco comuni",
-    "Ps_r_piano_comune": "Relazione piano-comune",
-    "Ps_r_tm_tp": "Relazione tipi (tm-tp)",
+    TABLE_PS_T_ANAGRAFICA_PC: "Anagrafica piani comunali",
+    TABLE_PS_D_STATO_PIANO: "Decodifica stato piano",
+    TABLE_PS_D_TIPO_PIANO: "Decodifica tipo piano",
+    TABLE_PS_D_TIPO_DELIBERA: "Decodifica tipo delibera",
+    TABLE_PS_GEO_COMUNE: "Elenco comuni",
+    TABLE_PS_R_PIANO_COMUNE: "Relazione piano-comune",
+    TABLE_PS_R_TM_TP: "Relazione tipi (tm-tp)",
 }
 
 
@@ -251,31 +281,37 @@ with tab_piani:
         try:
             df_comuni = get_comuni()
         except Exception as e:
-            st.error(f"Errore nel caricamento dei comuni: {e}")
+            st.error(f"Errore nel caricamento dei comuni dalla tabella {TABLE_PS_GEO_COMUNE}: {e}")
             df_comuni = pd.DataFrame(columns=["id_comune", "nome_comune"])
 
         try:
             df_stato = get_decodifica_options(
-                "Ps_d_stato_piano", "id_stato_piano", "descr_stato_piano"
+                TABLE_PS_D_STATO_PIANO, "id_stato_piano", "descr_stato_piano"
             )
         except Exception as e:
-            st.error(f"Errore nel caricamento degli stati piano: {e}")
+            st.error(
+                f"Errore nel caricamento degli stati piano dalla tabella {TABLE_PS_D_STATO_PIANO}: {e}"
+            )
             df_stato = pd.DataFrame(columns=["id_stato_piano", "descr_stato_piano"])
 
         try:
             df_tipo_piano = get_decodifica_options(
-                "Ps_d_tipo_piano", "id_tipo_piano", "descr_tipo_piano"
+                TABLE_PS_D_TIPO_PIANO, "id_tipo_piano", "descr_tipo_piano"
             )
         except Exception as e:
-            st.error(f"Errore nel caricamento dei tipi piano: {e}")
+            st.error(
+                f"Errore nel caricamento dei tipi piano dalla tabella {TABLE_PS_D_TIPO_PIANO}: {e}"
+            )
             df_tipo_piano = pd.DataFrame(columns=["id_tipo_piano", "descr_tipo_piano"])
 
         try:
             df_tipo_delibera = get_decodifica_options(
-                "Ps_d_tipo_delibera", "id_tipo_delibera", "descr_tipo_delibera"
+                TABLE_PS_D_TIPO_DELIBERA, "id_tipo_delibera", "descr_tipo_delibera"
             )
         except Exception as e:
-            st.error(f"Errore nel caricamento dei tipi delibera: {e}")
+            st.error(
+                f"Errore nel caricamento dei tipi delibera dalla tabella {TABLE_PS_D_TIPO_DELIBERA}: {e}"
+            )
             df_tipo_delibera = pd.DataFrame(
                 columns=["id_tipo_delibera", "descr_tipo_delibera"]
             )
@@ -290,7 +326,9 @@ with tab_piani:
                 )
                 selected_id_comune = int(comune_obj.id_comune)
             else:
-                st.warning("Nessun comune trovato nella tabella Ps_geo_comune.")
+                st.warning(
+                    f"Nessun comune trovato nella tabella {TABLE_PS_GEO_COMUNE}."
+                )
                 selected_id_comune = None
 
             # Stato piano
@@ -302,7 +340,9 @@ with tab_piani:
                 )
                 selected_id_stato = int(stato_obj.id_stato_piano)
             else:
-                st.warning("Tabella Ps_d_stato_piano vuota o non leggibile.")
+                st.warning(
+                    f"Tabella {TABLE_PS_D_STATO_PIANO} vuota o non leggibile."
+                )
                 selected_id_stato = None
 
             # Tipo piano
@@ -314,7 +354,9 @@ with tab_piani:
                 )
                 selected_id_tipo_piano = int(tp_obj.id_tipo_piano)
             else:
-                st.warning("Tabella Ps_d_tipo_piano vuota o non leggibile.")
+                st.warning(
+                    f"Tabella {TABLE_PS_D_TIPO_PIANO} vuota o non leggibile."
+                )
                 selected_id_tipo_piano = None
 
             # Tipo delibera
@@ -326,7 +368,9 @@ with tab_piani:
                 )
                 selected_id_tipo_delibera = int(td_obj.id_tipo_delibera)
             else:
-                st.warning("Tabella Ps_d_tipo_delibera vuota o non leggibile.")
+                st.warning(
+                    f"Tabella {TABLE_PS_D_TIPO_DELIBERA} vuota o non leggibile."
+                )
                 selected_id_tipo_delibera = None
 
             descrizione_piano = st.text_area(
@@ -371,7 +415,9 @@ with tab_piani:
         try:
             df_last = get_last_piani(limit=100)
             if df_last.empty:
-                st.info("Nessun piano presente in Ps_t_anagrafica_pc.")
+                st.info(
+                    f"Nessun piano presente nella tabella {TABLE_PS_T_ANAGRAFICA_PC}."
+                )
             else:
                 st.dataframe(df_last, use_container_width=True)
         except Exception as e:
@@ -401,11 +447,15 @@ with tab_generico:
         try:
             columns = get_table_columns(table_choice_generic)
         except Exception as e:
-            st.error(f"Impossibile leggere le colonne della tabella {table_choice_generic}: {e}")
+            st.error(
+                f"Impossibile leggere le colonne della tabella {table_choice_generic}: {e}"
+            )
             columns = []
 
         if columns:
-            st.markdown("**Valori da inserire (lascia vuoto per usare il default del DB, se esiste)**")
+            st.markdown(
+                "**Valori da inserire (lascia vuoto per usare il default del DB, se esiste)**"
+            )
 
             with st.form("form_inserimento_generico", clear_on_submit=True):
                 values: dict[str, str] = {}
@@ -428,8 +478,9 @@ with tab_generico:
                         try:
                             cols_sql = ", ".join(f'"{c}"' for c in cols_to_use)
                             placeholders = ", ".join(["%s"] * len(cols_to_use))
+                            # Il nome tabella è in minuscolo e non quotato per allinearsi agli schemi del DB
                             query = (
-                                f'INSERT INTO "{table_choice_generic}" ({cols_sql}) '
+                                f"INSERT INTO {table_choice_generic} ({cols_sql}) "
                                 f"VALUES ({placeholders})"
                             )
 
