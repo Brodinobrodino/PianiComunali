@@ -526,6 +526,66 @@ def get_table_columns(table_name: str) -> list[str]:
 
 
 # -----------------------------------------------------------
+# UTILITY GLOBALI PER APERTURA PERCORSI (Esplora risorse)
+# -----------------------------------------------------------
+
+
+def _file_uri_to_windows_path(value: object) -> str:
+    """Converte un URI/URL o stringa di percorso in un path Windows.
+
+    Gestisce:
+    - "file://" prefisso (rimosso)
+    - percorsi UNC (\\server\share\... oppure //server/share/...)
+    - percorsi con unit  disco (C:/..., C:\\...)
+    - stringhe tipo "ad.regione.piemonte.it/path/..." convertite in \\host\path
+    """
+
+    if value is None or (isinstance(value, float) and pd.isna(value)):
+        return ""
+
+    s = str(value).strip()
+    if not s:
+        return ""
+
+    lower = s.lower()
+    # Rimuoviamo il prefisso file:// se presente
+    if lower.startswith("file://"):
+        s = s[7:]
+
+    # UNC esplicito: \\server\share\...
+    if s.startswith("\\") or s.startswith("//"):
+        return s.replace("/", "\\")
+
+    # Percorso con unit  disco: C:/..., C:\...
+    if len(s) >= 2 and s[1] == ":":
+        return s.replace("/", "\\")
+
+    # Caso tipo ad.regione.piemonte.it/rp/...
+    parts = s.split("/")
+    if len(parts) > 1:
+        host = parts[0]
+        rest = "\\".join(parts[1:])
+        return f"\\\\{host}\\{rest}"
+
+    return s
+
+
+def open_path_in_explorer(value: object) -> None:
+    """Apre il percorso indicato (file o cartella) in Esplora risorse (solo Windows)."""
+
+    win_path = _file_uri_to_windows_path(value)
+    if not win_path:
+        raise ValueError("Percorso vuoto o non valido")
+
+    # Se   un file, apriamo la cartella che lo contiene
+    if os.path.isfile(win_path):
+        folder = os.path.dirname(win_path)
+        os.startfile(folder)  # type: ignore[attr-defined]
+    else:
+        os.startfile(win_path)  # type: ignore[attr-defined]
+
+
+# -----------------------------------------------------------
 # DIAGNOSTICA CONNESSIONE DATABASE
 # -----------------------------------------------------------
 with st.sidebar:
