@@ -713,30 +713,48 @@ with tab_visualizza:
                     selected_idx = int(selected_rows.index[0])
 
             # Lista opzioni per la tendina, allineate all'ordine delle righe in df_view_edit
-            options = list(df_view_edit.itertuples(index=False))
+            # Usiamo indici numerici così possiamo controllare la selezione via session_state
+            num_rows = len(df_view_edit)
+            indices = list(range(num_rows))
 
             # Se disponibile un percorso, permetti di aprire la cartella in Esplora risorse
-            if "Path" in df_view_edit.columns and options:
+            if "Path" in df_view_edit.columns and num_rows > 0:
                 st.markdown("### Apri cartella in Esplora risorse (sul tuo PC)")
 
-                # Se una riga è stata selezionata nella tabella, usala come default per la tendina
-                default_index = 0
-                if selected_idx is not None and 0 <= selected_idx < len(options):
-                    default_index = selected_idx
+                state_key = "seleziona_piano_apri_cartella"
 
-                row_to_open = st.selectbox(
+                # Se una riga è stata selezionata nella tabella, sincronizza lo stato della tendina
+                if selected_idx is not None and 0 <= selected_idx < num_rows:
+                    st.session_state[state_key] = selected_idx
+                elif state_key not in st.session_state:
+                    # Default alla prima riga disponibile
+                    st.session_state[state_key] = 0
+
+                def _format_piano(idx: int) -> str:
+                    try:
+                        row = df_view_edit.iloc[idx]
+                    except Exception:
+                        return str(idx)
+                    return f"{row.get('id_piano', '?')} - {row.get('Piano', '')}"
+
+                selected_idx_box = st.selectbox(
                     "Seleziona il piano per aprire la cartella associata",
-                    options=options,
-                    format_func=lambda row: f"{getattr(row, 'id_piano', '?')} - {getattr(row, 'Piano', '')}",
-                    key="seleziona_piano_apri_cartella",
-                    index=default_index,
+                    options=indices,
+                    format_func=_format_piano,
+                    key=state_key,
                 )
 
+                # Recupera la riga selezionata a partire dall'indice scelto nella tendina
+                try:
+                    row_to_open = df_view_edit.iloc[selected_idx_box]
+                except Exception:
+                    row_to_open = None
+
                 if row_to_open is not None:
-                    piano_sel = getattr(row_to_open, "Piano", "")
+                    piano_sel = row_to_open.get("Piano", "")
                     st.markdown(f"**Piano selezionato:** {piano_sel}")
 
-                    selected_path = getattr(row_to_open, "Path", None)
+                    selected_path = row_to_open.get("Path", None)
                     if selected_path and st.button(
                         "Apri cartella in Esplora risorse",
                         key="btn_apri_cartella_explorer",
