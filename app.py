@@ -535,15 +535,18 @@ def _file_uri_to_windows_path(value: object) -> str:
 
     Gestisce:
     - prefisso "file://" o "file:/" (rimossi se presenti)
-    - percorsi UNC (\\server\share\... oppure //server/share/...)
-    - percorsi con unita disco (C:/..., C:\\...)
-    - stringhe tipo "ad.regione.piemonte.it/path/..." convertite in \\host\path
+    - percorsi UNC espliciti (\\server\share\... oppure //server/share/...)
+    - percorsi con unita disco locali (C:/..., C:\\...)
+    - forme "host\\share\\cartella..." o "host/path/..." convertite in UNC \\host\share\...
     """
 
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return ""
 
     s = str(value).strip()
+    # Rimuove eventuali caratteri di controllo (ritorno carrello, newline) che possono
+    # provenire dal DB e generare percorsi tipo "ad.regione.piemonte.it\rp" -> "ad.regione.piemonte.itrp"
+    s = s.replace("\r", "").replace("\n", "")
     if not s:
         return ""
 
@@ -551,11 +554,11 @@ def _file_uri_to_windows_path(value: object) -> str:
 
     # Rimuoviamo qualunque prefisso file:*, gestendo sia file:/..., file://..., file:///...
     if lower.startswith("file:"):
-        # taglia "file:" e poi toglie eventuali slash iniziali
+        # taglia "file:" e poi toglie eventuali slash o backslash iniziali
         s = s[5:]
         s = s.lstrip("/\\")
 
-    # UNC esplicito: \\server\share\...
+    # UNC esplicito: \\server\share\... oppure //server/share/...
     if s.startswith("\\") or s.startswith("//"):
         return s.replace("/", "\\")
 
@@ -563,13 +566,23 @@ def _file_uri_to_windows_path(value: object) -> str:
     if len(s) >= 2 and s[1] == ":":
         return s.replace("/", "\\")
 
-    # Caso tipo ad.regione.piemonte.it/rp/...
+    # Forma host\\share\\cartella (es. ad.regione.piemonte.it\rp\A1800A\...)
+    if "\\" in s and not s.startswith("\\") and not s.startswith("//"):
+        parts = s.split("\\", 1)
+        host = parts[0]
+        rest = parts[1] if len(parts) > 1 else ""
+        if rest:
+            return f"\\\\{host}\\{rest}"
+        return f"\\\\{host}"
+
+    # Forma host/path/... con slash (es. ad.regione.piemonte.it/rp/A1800A/...)
     parts = s.split("/")
     if len(parts) > 1:
         host = parts[0]
         rest = "\\".join(parts[1:])
         return f"\\\\{host}\\{rest}"
 
+    # Caso residuo: restituiamo la stringa cosi com'e
     return s
 
 
