@@ -406,8 +406,8 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
                 return s
 
             lower = s.lower()
-            # Già un URL/URI utilizzabile dal browser
-            if lower.startswith(("file://", "http://", "https://")):
+            # Già un URL/URI utilizzabile dal browser oppure un valore che inizia già con "file:"
+            if lower.startswith("file:") or lower.startswith(("http://", "https://")):
                 return s
 
             # Percorso UNC di Windows: \\server\share\cartella\file.pdf
@@ -534,7 +534,7 @@ def _file_uri_to_windows_path(value: object) -> str:
     """Converte un URI/URL o stringa di percorso in un path Windows.
 
     Gestisce:
-    - prefisso "file://" (rimosso se presente)
+    - prefisso "file://" o "file:/" (rimossi se presenti)
     - percorsi UNC (\\server\share\... oppure //server/share/...)
     - percorsi con unita disco (C:/..., C:\\...)
     - stringhe tipo "ad.regione.piemonte.it/path/..." convertite in \\host\path
@@ -548,9 +548,12 @@ def _file_uri_to_windows_path(value: object) -> str:
         return ""
 
     lower = s.lower()
-    # Rimuoviamo il prefisso file:// se presente
-    if lower.startswith("file://"):
-        s = s[7:]
+
+    # Rimuoviamo qualunque prefisso file:*, gestendo sia file:/..., file://..., file:///...
+    if lower.startswith("file:"):
+        # taglia "file:" e poi toglie eventuali slash iniziali
+        s = s[5:]
+        s = s.lstrip("/\\")
 
     # UNC esplicito: \\server\share\...
     if s.startswith("\\") or s.startswith("//"):
