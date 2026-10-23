@@ -418,12 +418,76 @@ def get_last_piani(limit: int = 50) -> pd.DataFrame:
 
 
 def get_relazioni_piano_comune() -> pd.DataFrame:
-    """Restituisce la relazione piano-comune (id_piano, id_comune)."""
+    """Restituisce la relazione piano-comune (id_piano, id_comune).
+
+    Rileva i nomi reali delle colonne nella tabella di relazione e li
+    aliassa verso id_piano e id_comune, in modo da poter fare il merge
+    in modo robusto con i dati dei piani e dei comuni.
+    """
+
+    # Ricaviamo le colonne effettive della tabella di relazione
+    try:
+        columns = get_table_columns(TABLE_PS_R_PIANO_COMUNE)
+    except Exception as e:
+        raise RuntimeError(
+            f"Impossibile leggere le colonne della tabella {TABLE_PS_R_PIANO_COMUNE}: {e}"
+        ) from e
+
+    if not columns:
+        raise RuntimeError(
+            f"La tabella {TABLE_PS_R_PIANO_COMUNE} non contiene colonne oppure non esiste."
+        )
+
+    # Colonna che rappresenta l'id_piano
+    piano_col = None
+    for c in columns:
+        cl = c.lower()
+        if cl == "id_piano":
+            piano_col = c
+            break
+    if piano_col is None:
+        for c in columns:
+            cl = c.lower()
+            if "piano" in cl and cl.startswith("id_"):
+                piano_col = c
+                break
+    if piano_col is None:
+        for c in columns:
+            if "piano" in c.lower():
+                piano_col = c
+                break
+
+    # Colonna che rappresenta l'id_comune
+    comune_col = None
+    for c in columns:
+        cl = c.lower()
+        if cl == "id_comune":
+            comune_col = c
+            break
+    if comune_col is None:
+        for c in columns:
+            cl = c.lower()
+            if "comune" in cl and cl.startswith("id_"):
+                comune_col = c
+                break
+    if comune_col is None:
+        for c in columns:
+            if "comune" in c.lower():
+                comune_col = c
+                break
+
+    if piano_col is None or comune_col is None:
+        raise RuntimeError(
+            f"Impossibile individuare le colonne di relazione piano/comune in {TABLE_PS_R_PIANO_COMUNE}."
+        )
 
     conn = None
     try:
         conn = get_connection()
-        query = f"SELECT id_piano, id_comune FROM {TABLE_PS_R_PIANO_COMUNE}"
+        query = (
+            f'SELECT "{piano_col}" AS id_piano, "{comune_col}" AS id_comune '
+            f"FROM {TABLE_PS_R_PIANO_COMUNE}"
+        )
         df = pd.read_sql_query(query, conn)
         return df
     finally:
@@ -509,15 +573,26 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
         }
     )
 
+    # Se esiste una colonna con "path" nel nome, la esponiamo come "Path"
+    path_col = None
+    for c in df.columns:
+        if "path" in c.lower() or "url" in c.lower():
+            path_col = c
+            break
+    if path_col is not None and path_col != "Path":
+        df = df.rename(columns={path_col: "Path"})
+
     # Ordine colonne principale
     ordered_cols = [
         "id_piano",
         "Piano",
         "Comune",
+        "id_comune",
         "Stato piano",
         "Tipo piano",
         "Tipo delibera",
         "Note",
+        "Path",
     ]
     existing_cols = [c for c in ordered_cols if c in df.columns]
     # Aggiungiamo eventuali colonne residue in coda
@@ -620,7 +695,19 @@ with tab_visualizza:
                     )
                 df_view = df_view[mask]
 
-            st.dataframe(df_view, use_container_width=True)
+            # Se è presente una colonna "Path", la rendiamo cliccabile come link
+            column_config = {}
+            if "Path" in df_view.columns:
+                column_config["Path"] = st.column_config.LinkColumn(
+                    "Path",
+                    display_text="apri",
+                )
+
+            st.dataframe(
+                df_view,
+                use_container_width=True,
+                column_config=column_config,
+            )
     except Exception as e:
         st.error(f"Errore durante il caricamento della vista integrata dei piani: {e}")
 
