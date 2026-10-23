@@ -534,9 +534,9 @@ def _file_uri_to_windows_path(value: object) -> str:
     """Converte un URI/URL o stringa di percorso in un path Windows.
 
     Gestisce:
-    - "file://" prefisso (rimosso)
+    - prefisso "file://" (rimosso se presente)
     - percorsi UNC (\\server\share\... oppure //server/share/...)
-    - percorsi con unit  disco (C:/..., C:\\...)
+    - percorsi con unita disco (C:/..., C:\\...)
     - stringhe tipo "ad.regione.piemonte.it/path/..." convertite in \\host\path
     """
 
@@ -556,7 +556,7 @@ def _file_uri_to_windows_path(value: object) -> str:
     if s.startswith("\\") or s.startswith("//"):
         return s.replace("/", "\\")
 
-    # Percorso con unit  disco: C:/..., C:\...
+    # Percorso con unita disco: C:/..., C:\...
     if len(s) >= 2 and s[1] == ":":
         return s.replace("/", "\\")
 
@@ -570,6 +570,7 @@ def _file_uri_to_windows_path(value: object) -> str:
     return s
 
 
+
 def open_path_in_explorer(value: object) -> None:
     """Apre il percorso indicato (file o cartella) in Esplora risorse (solo Windows)."""
 
@@ -577,13 +578,12 @@ def open_path_in_explorer(value: object) -> None:
     if not win_path:
         raise ValueError("Percorso vuoto o non valido")
 
-    # Se   un file, apriamo la cartella che lo contiene
+    # Se e un file, apriamo la cartella che lo contiene
     if os.path.isfile(win_path):
         folder = os.path.dirname(win_path)
         os.startfile(folder)  # type: ignore[attr-defined]
     else:
         os.startfile(win_path)  # type: ignore[attr-defined]
-
 
 # -----------------------------------------------------------
 # DIAGNOSTICA CONNESSIONE DATABASE
