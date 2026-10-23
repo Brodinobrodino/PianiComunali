@@ -602,18 +602,12 @@ def open_path_in_explorer(value: object) -> None:
         os.startfile(win_path)  # type: ignore[attr-defined]
 
 # -----------------------------------------------------------
-# DIAGNOSTICA CONNESSIONE DATABASE
+# DIAGNOSTICA CONNESSIONE DATABASE (disattivata per lasciare più spazio alle tabelle)
 # -----------------------------------------------------------
-with st.sidebar:
-    st.subheader("Stato database")
-    try:
-        conn = get_connection()
-        with conn:
-            st.success(
-                f"Connesso a {DB_NAME} su {DB_HOST}:{DB_PORT} come {DB_USER}"
-            )
-    except Exception as e:
-        st.error(f"Errore di connessione al database: {e}")
+# In precedenza qui veniva mostrato un riquadro nella sidebar con lo stato
+# della connessione al database. È stato rimosso per non occupare spazio
+# orizzontale e permettere alle tabelle principali di sfruttare tutta la
+# larghezza della pagina.
 
 
 # -----------------------------------------------------------
@@ -692,6 +686,10 @@ with tab_visualizza:
             df_view_display = df_view.copy()
             if SELEZ_COL not in df_view_display.columns:
                 df_view_display[SELEZ_COL] = False
+
+            # Porta la colonna di selezione in prima posizione nella tabella
+            cols = [SELEZ_COL] + [c for c in df_view_display.columns if c != SELEZ_COL]
+            df_view_display = df_view_display[cols]
 
             column_config[SELEZ_COL] = st.column_config.CheckboxColumn(
                 "Seleziona",
