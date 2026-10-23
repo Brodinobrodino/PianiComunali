@@ -385,6 +385,31 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
     if path_col is not None and path_col != "Path":
         df = df.rename(columns={path_col: "Path"})
 
+    # Normalizziamo i path in formato file:// per evitare che il browser li interpreti
+    # come link verso http://localhost. Se il valore non inizia già con file://, http://
+    # o https://, viene prefissato con file://. Per percorsi UNC (es. \\ileserver\share)
+    # convertiamo in file://server/share.
+    if "Path" in df.columns:
+        def _normalize_path(value: object) -> object:
+            if pd.isna(value):
+                return value
+            s = str(value).strip()
+            if not s:
+                return s
+            lower = s.lower()
+            if lower.startswith(("file://", "http://", "https://")):
+                return s
+            # Percorso UNC di Windows
+            if s.startswith("\\\\"):
+                # es. \\server\share\cartella -> file://server/share/cartella
+                s_clean = s.lstrip("\\")
+                s_clean = s_clean.replace("\\", "/")
+                return f"file://{s_clean}"
+            # Qualsiasi altro percorso viene esposto come file://<percorso>
+            return f"file://{s}"
+
+        df["Path"] = df["Path"].apply(_normalize_path)
+
     # Ordine colonne principale
     ordered_cols = [
         "id_piano",
