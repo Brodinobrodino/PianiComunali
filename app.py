@@ -70,7 +70,9 @@ def get_decodifica_options(table_name: str, id_column: str, desc_column: str) ->
 
     I parametri id_column e desc_column vengono usati come "suggerimenti".
     Se i nomi non corrispondono alle colonne reali, la funzione prova a
-    individuarle automaticamente sulla base dei nomi presenti nel DB.
+    individuarle automaticamente sulla base dei nomi presenti nel DB e
+    restituisce comunque un DataFrame con colonne chiamate esattamente
+    come id_column e desc_column.
     """
 
     # Ricaviamo le colonne effettive della tabella
@@ -86,7 +88,7 @@ def get_decodifica_options(table_name: str, id_column: str, desc_column: str) ->
             f"La tabella {table_name} non contiene colonne oppure non esiste."
         )
 
-    # Determiniamo la colonna ID
+    # Determiniamo la colonna ID effettiva
     id_col = None
     if id_column in columns:
         id_col = id_column
@@ -104,7 +106,7 @@ def get_decodifica_options(table_name: str, id_column: str, desc_column: str) ->
     if id_col is None:
         id_col = columns[0]
 
-    # Determiniamo la colonna descrittiva
+    # Determiniamo la colonna descrittiva effettiva
     desc_col = None
     if desc_column in columns:
         desc_col = desc_column
@@ -124,9 +126,10 @@ def get_decodifica_options(table_name: str, id_column: str, desc_column: str) ->
     conn = None
     try:
         conn = get_connection()
-        # Tabella in minuscolo non quotata, colonne quotate per preservare il nome esatto
+        # Tabella non quotata (minuscolo) e colonne quotate per preservare il nome esatto.
+        # Alias delle colonne verso i nomi logici attesi dal resto dell'app
         query = (
-            f'SELECT "{id_col}", "{desc_col}" '
+            f'SELECT "{id_col}" AS "{id_column}", "{desc_col}" AS "{desc_column}" '
             f"FROM {table_name} ORDER BY \"{desc_col}\""
         )
         df = pd.read_sql_query(query, conn)
