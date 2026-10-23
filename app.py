@@ -414,28 +414,28 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
             if s.startswith("\\\\"):
                 s_clean = s.lstrip("\\")
                 s_clean = s_clean.replace("\\", "/")
-                return f"file://{s_clean}"
+                return f"file:/{s_clean}"
 
             # Percorso Windows con unità (es. C:\\cartella\\file.pdf)
             if len(s) >= 3 and s[1] == ":" and s[2] in ("\\", "/"):
                 drive = s[0].upper()
                 rest = s[2:].lstrip("\\/")
                 rest = rest.replace("\\", "/")
-                return f"file://{drive}:/{rest}"
+                return f"file:/{drive}:/{rest}"
 
             # Percorso "finto assoluto" usato per share di rete tipo "/ad.regione.piemonte.it/..."
             if s.startswith("/ad.regione.piemonte.it/"):
                 # Rimuove lo slash iniziale in modo da ottenere file://ad.regione.piemonte.it/...
                 s_clean = s.lstrip("/")
-                return f"file://{s_clean}"
+                return f"file:/{s_clean}"
 
             # Percorso assoluto Unix-like ("/...")
             if s.startswith("/"):
                 # Percorso file locale stile Unix -> file:///percorso
-                return f"file://{s}"
+                return f"file:/{s}"
 
             # Altri casi (es. "ad.regione.piemonte.it/..."): aggiunge file:// davanti
-            return f"file://{s}"
+            return f"file:/{s}"
 
         df["Path"] = df["Path"].apply(_normalize_path)
 
