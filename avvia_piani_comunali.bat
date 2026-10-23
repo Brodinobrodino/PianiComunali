@@ -7,8 +7,8 @@ cd /d %~dp0
 REM Parametri di connessione al database (modifica se necessario)
 set DB_HOST=10.138.154.6
 set DB_NAME=PESER
-set DB_USER=peser
-set DB_PASS=peser2013
+set DB_USER=peser_rw
+set DB_PASS=peserrw
 set DB_PORT=10101
 
 REM Avvio dell'app Streamlit in locale usando l'interprete Python
