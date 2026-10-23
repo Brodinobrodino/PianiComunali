@@ -389,16 +389,46 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
     # come link verso http://localhost. Se il valore non inizia già con file://, http://
     # o https://, viene prefissato con file://. Per percorsi UNC (es. \\ileserver\share)
     # convertiamo in file://server/share.
-    # I valori nella colonna "Path" si assumono già essere URL/URI validi
-    # (es. "file://ad.regione.piemonte.it/..." oppure "https://...").
-    # Qui facciamo solo uno strip degli spazi senza modificarne il contenuto,
-    # per evitare di introdurre prefissi doppi o formati non riconosciuti
-    # dal browser aziendale.
+    # Normalizzazione valori della colonna "Path" per ottenere URL/URI
+    # cliccabili dal browser.
+    # Regole:
+    # - se inizia già con file://, http://, https:// -> lasciato invariato
+    # - percorsi UNC (es. \\server\share\cartella\file.pdf) -> file://server/share/cartella/file.pdf
+    # - percorsi Windows con unità (es. C:\\cartella\\file.pdf) -> file:///C:/cartella/file.pdf
+    # - percorsi assoluti Unix (/...) -> file:///percorso
+    # - stringhe tipo "ad.regione.piemonte.it/..." (senza schema) -> file://ad.regione.piemonte.it/...
     if "Path" in df.columns:
         def _normalize_path(value: object) -> object:
             if pd.isna(value):
                 return value
-            return str(value).strip()
+            s = str(value).strip()
+            if not s:
+                return s
+
+            lower = s.lower()
+            # Già un URL/URI utilizzabile dal browser
+            if lower.startswith(("file://", "http://", "https://")):
+                return s
+
+            # Percorso UNC di Windows: \\server\share\cartella\file.pdf
+            if s.startswith("\\\\"):
+                s_clean = s.lstrip("\\")
+                s_clean = s_clean.replace("\\", "/")
+                return f"file://{s_clean}"
+
+            # Percorso Windows con unità (es. C:\\cartella\\file.pdf)
+            if len(s) >= 3 and s[1] == ":" and s[2] in ("\\", "/"):
+                drive = s[0].upper()
+                rest = s[2:].lstrip("\\/")
+                rest = rest.replace("\\", "/")
+                return f"file:///{drive}:/{rest}"
+
+            # Percorso assoluto Unix-like ("/...")
+            if s.startswith("/"):
+                return f"file://{s}"
+
+            # Altri casi (es. "ad.regione.piemonte.it/..."): aggiunge file:// davanti
+            return f"file://{s}"
 
         df["Path"] = df["Path"].apply(_normalize_path)
 
