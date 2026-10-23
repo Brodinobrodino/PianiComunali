@@ -145,23 +145,25 @@ def insert_piano_comunale(
     id_tipo_piano: int,
     id_tipo_delibera: int,
     id_comune: int,
+    path_file: str | None = None,
     note: str | None = None,
 ) -> int:
     """Inserisce un piano comunale e la relazione con il comune.
 
-    ⚠️ Adatta nomi tabella/colonne ai tuoi schemi REALI.
+    Mappa esplicitamente sullo schema reale del database:
 
-    Assunzioni usate qui (da verificare sul tuo DB):
-    - Tabella principale: "ps_t_anagrafica_pc" (vedi costante TABLE_PS_T_ANAGRAFICA_PC)
-        * id_piano           SERIAL PK
-        * descrizione_piano  TEXT
-        * id_stato_piano     INT FK -> ps_d_stato_piano
-        * id_tipo_piano      INT FK -> ps_d_tipo_piano
-        * id_tipo_delibera   INT FK -> ps_d_tipo_delibera
-        * note               TEXT (opzionale)
-    - Tabella relazione piano-comune: "ps_r_piano_comune" (vedi costante TABLE_PS_R_PIANO_COMUNE)
-        * id_piano   INT FK -> ps_t_anagrafica_pc
-        * id_comune  INT FK -> ps_geo_comune
+    - Tabella principale: ps_t_anagrafica_pc (TABLE_PS_T_ANAGRAFICA_PC)
+        * id_modulo       SERIAL PK (usato come id_piano nell'app)
+        * fk_tipo_piano   INT FK -> ps_d_tipo_piano.id_tipo_piano
+        * fk_stato_piano  INT FK -> ps_d_stato_piano.id_stato_piano
+        * fk_delibera     INT FK -> ps_d_tipo_delibera.id_delibera
+        * path_file       TEXT/VARCHAR (percorso o URL del documento)
+        * note            TEXT
+        * ente            TEXT (usato come descrizione sintetica del piano)
+
+    - Tabella relazione piano-comune: ps_r_piano_comune (TABLE_PS_R_PIANO_COMUNE)
+        * fk_modulo  INT FK -> ps_t_anagrafica_pc.id_modulo
+        * fk_comune  INT FK -> ps_geo_comune.id_comune
     """
 
     conn = None
@@ -171,27 +173,30 @@ def insert_piano_comunale(
         conn = get_connection()
         cursor = conn.cursor()
 
+        # Inserimento nella tabella principale dei piani
         insert_piano_query = (
             f"INSERT INTO {TABLE_PS_T_ANAGRAFICA_PC} "
-            "(descrizione_piano, id_stato_piano, id_tipo_piano, id_tipo_delibera, note) "
-            "VALUES (%s, %s, %s, %s, %s) RETURNING id_piano;"
+            "(fk_tipo_piano, fk_stato_piano, fk_delibera, path_file, note, ente) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id_modulo;"
         )
 
         cursor.execute(
             insert_piano_query,
             (
-                descrizione_piano,
-                id_stato_piano,
                 id_tipo_piano,
+                id_stato_piano,
                 id_tipo_delibera,
+                path_file,
                 note,
+                descrizione_piano,
             ),
         )
 
         id_piano = cursor.fetchone()[0]
 
+        # Inserimento della relazione piano-comune
         insert_rel_query = (
-            f"INSERT INTO {TABLE_PS_R_PIANO_COMUNE} (id_piano, id_comune) "
+            f"INSERT INTO {TABLE_PS_R_PIANO_COMUNE} (fk_modulo, fk_comune) "
             "VALUES (%s, %s);"
         )
         cursor.execute(insert_rel_query, (id_piano, id_comune))
@@ -206,62 +211,22 @@ def insert_piano_comunale(
 
 
 def get_comuni() -> pd.DataFrame:
-    """Ritorna elenco dei comuni.
+    """Ritorna l'elenco dei comuni usando lo schema reale ps_geo_comune.
 
-    Non assume più a priori i nomi delle colonne, ma li ricava dal database.
-    Restituisce sempre un DataFrame con colonne normalizzate:
-    - id_comune
-    - nome_comune
+    Colonne restituite (normalizzate per l'app):
+    - id_comune  (ps_geo_comune.id_comune)
+    - nome_comune (alias di ps_geo_comune.comune)
     """
-
-    # Ricaviamo l'elenco delle colonne dalla tabella reale
-    try:
-        columns = get_table_columns(TABLE_PS_GEO_COMUNE)
-    except Exception as e:
-        # Se non riusciamo nemmeno a leggere le colonne, propaghiamo l'errore
-        raise RuntimeError(
-            f"Impossibile leggere le colonne della tabella {TABLE_PS_GEO_COMUNE}: {e}"
-        ) from e
-
-    if not columns:
-        raise RuntimeError(
-            f"La tabella {TABLE_PS_GEO_COMUNE} non contiene colonne oppure non esiste."
-        )
-
-    # Heuristica per identificare la colonna ID e la colonna descrittiva
-    id_col = None
-    for c in columns:
-        c_low = c.lower()
-        if c_low == "id_comune" or c_low.startswith("id_"):
-            id_col = c
-            break
-    if id_col is None:
-        # fallback: prima colonna
-        id_col = columns[0]
-
-    desc_col = None
-    for c in columns:
-        if c == id_col:
-            continue
-        c_low = c.lower()
-        if any(key in c_low for key in ("nome", "denominazione", "descr", "denom")):
-            desc_col = c
-            break
-
-    if desc_col is None:
-        # fallback: seconda colonna, se esiste, altrimenti la stessa dell'id
-        desc_col = columns[1] if len(columns) > 1 else id_col
 
     conn = None
     try:
         conn = get_connection()
         query = (
-            f'SELECT "{id_col}" AS id_comune, "{desc_col}" AS nome_comune '
-            f"FROM {TABLE_PS_GEO_COMUNE} ORDER BY \"{desc_col}\""
+            f"SELECT id_comune, comune AS nome_comune "
+            f"FROM {TABLE_PS_GEO_COMUNE} "
+            f"ORDER BY comune"
         )
         df = pd.read_sql_query(query, conn)
-        # Normalizziamo i nomi delle colonne verso il resto dell'app
-        df.columns = ["id_comune", "nome_comune"]
         return df
     finally:
         if conn is not None:
@@ -271,144 +236,38 @@ def get_comuni() -> pd.DataFrame:
 def get_last_piani(limit: int = 50) -> pd.DataFrame:
     """Restituisce gli ultimi piani inseriti (per consultazione veloce).
 
-    Non assume più rigidamente i nomi delle colonne, ma li ricava dal database
-    e li aliassa verso i nomi logici usati dal resto dell'app:
-    - id_piano
-    - descrizione_piano
-    - id_stato_piano
-    - id_tipo_piano
-    - id_tipo_delibera
+    Usa lo schema reale ps_t_anagrafica_pc e aliassa le colonne verso i nomi
+    logici usati dal resto dell'app:
+
+    - id_modulo       -> id_piano
+    - ente            -> descrizione_piano
+    - fk_stato_piano  -> id_stato_piano
+    - fk_tipo_piano   -> id_tipo_piano
+    - fk_delibera     -> id_tipo_delibera
+    - path_file       (per il link al documento)
     - note
     """
-
-    # Recuperiamo le colonne effettive della tabella dei piani
-    try:
-        columns = get_table_columns(TABLE_PS_T_ANAGRAFICA_PC)
-    except Exception as e:
-        raise RuntimeError(
-            f"Impossibile leggere le colonne della tabella {TABLE_PS_T_ANAGRAFICA_PC}: {e}"
-        ) from e
-
-    if not columns:
-        raise RuntimeError(
-            f"La tabella {TABLE_PS_T_ANAGRAFICA_PC} non contiene colonne oppure non esiste."
-        )
-
-    # id_piano
-    id_col = None
-    for c in columns:
-        cl = c.lower()
-        if cl == "id_piano":
-            id_col = c
-            break
-    if id_col is None:
-        for c in columns:
-            if c.lower().startswith("id_"):
-                id_col = c
-                break
-    if id_col is None:
-        id_col = columns[0]
-
-    # descrizione_piano
-    desc_col = None
-    for c in columns:
-        cl = c.lower()
-        if "descr" in cl and "piano" in cl:
-            desc_col = c
-            break
-    if desc_col is None:
-        for c in columns:
-            if "descr" in c.lower():
-                desc_col = c
-                break
-
-    # id_stato_piano
-    stato_col = None
-    for c in columns:
-        cl = c.lower()
-        if cl == "id_stato_piano":
-            stato_col = c
-            break
-    if stato_col is None:
-        for c in columns:
-            cl = c.lower()
-            if "stato" in cl and cl.startswith("id_"):
-                stato_col = c
-                break
-    if stato_col is None:
-        for c in columns:
-            if "stato" in c.lower():
-                stato_col = c
-                break
-
-    # id_tipo_piano
-    tipo_piano_col = None
-    for c in columns:
-        cl = c.lower()
-        if cl == "id_tipo_piano":
-            tipo_piano_col = c
-            break
-    if tipo_piano_col is None:
-        for c in columns:
-            cl = c.lower()
-            if "tipo" in cl and "piano" in cl and cl.startswith("id_"):
-                tipo_piano_col = c
-                break
-    if tipo_piano_col is None:
-        for c in columns:
-            cl = c.lower()
-            if "tipo" in cl and "piano" in cl:
-                tipo_piano_col = c
-                break
-
-    # id_tipo_delibera
-    tipo_delibera_col = None
-    for c in columns:
-        cl = c.lower()
-        if cl == "id_tipo_delibera":
-            tipo_delibera_col = c
-            break
-    if tipo_delibera_col is None:
-        for c in columns:
-            cl = c.lower()
-            if "delib" in cl and cl.startswith("id_"):
-                tipo_delibera_col = c
-                break
-    if tipo_delibera_col is None:
-        for c in columns:
-            if "delib" in c.lower():
-                tipo_delibera_col = c
-                break
-
-    # note
-    note_col = None
-    for c in columns:
-        if "note" in c.lower():
-            note_col = c
-            break
-
-    # Costruiamo la lista di colonne da selezionare con alias coerenti
-    select_parts: list[str] = [f'"{id_col}" AS id_piano']
-    if desc_col:
-        select_parts.append(f'"{desc_col}" AS descrizione_piano')
-    if stato_col:
-        select_parts.append(f'"{stato_col}" AS id_stato_piano')
-    if tipo_piano_col:
-        select_parts.append(f'"{tipo_piano_col}" AS id_tipo_piano')
-    if tipo_delibera_col:
-        select_parts.append(f'"{tipo_delibera_col}" AS id_tipo_delibera')
-    if note_col:
-        select_parts.append(f'"{note_col}" AS note')
-
-    select_sql = ", ".join(select_parts)
 
     conn = None
     try:
         conn = get_connection()
         query = (
-            f"SELECT {select_sql} "
+            "SELECT "
+            "  id_modulo AS id_piano, "
+            "  ente AS descrizione_piano, "
+            "  fk_stato_piano AS id_stato_piano, "
+            "  fk_tipo_piano AS id_tipo_piano, "
+            "  fk_delibera AS id_tipo_delibera, "
+            "  path_file, "
+            "  note, "
+            "  dt_delibera, "
+            "  num_delibera, "
+            "  anno_approvazione, "
+            "  flg_vigente, "
+            "  dt_aggiornamento "
             f"FROM {TABLE_PS_T_ANAGRAFICA_PC} "
-            f'ORDER BY "{id_col}" DESC LIMIT %s'
+            "ORDER BY id_modulo DESC "
+            "LIMIT %s"
         )
         df = pd.read_sql_query(query, conn, params=(limit,))
         return df
@@ -420,72 +279,16 @@ def get_last_piani(limit: int = 50) -> pd.DataFrame:
 def get_relazioni_piano_comune() -> pd.DataFrame:
     """Restituisce la relazione piano-comune (id_piano, id_comune).
 
-    Rileva i nomi reali delle colonne nella tabella di relazione e li
-    aliassa verso id_piano e id_comune, in modo da poter fare il merge
-    in modo robusto con i dati dei piani e dei comuni.
+    Usa lo schema reale:
+    - ps_r_piano_comune.fk_modulo  -> id_piano (id_modulo di ps_t_anagrafica_pc)
+    - ps_r_piano_comune.fk_comune  -> id_comune (ps_geo_comune.id_comune)
     """
-
-    # Ricaviamo le colonne effettive della tabella di relazione
-    try:
-        columns = get_table_columns(TABLE_PS_R_PIANO_COMUNE)
-    except Exception as e:
-        raise RuntimeError(
-            f"Impossibile leggere le colonne della tabella {TABLE_PS_R_PIANO_COMUNE}: {e}"
-        ) from e
-
-    if not columns:
-        raise RuntimeError(
-            f"La tabella {TABLE_PS_R_PIANO_COMUNE} non contiene colonne oppure non esiste."
-        )
-
-    # Colonna che rappresenta l'id_piano
-    piano_col = None
-    for c in columns:
-        cl = c.lower()
-        if cl == "id_piano":
-            piano_col = c
-            break
-    if piano_col is None:
-        for c in columns:
-            cl = c.lower()
-            if "piano" in cl and cl.startswith("id_"):
-                piano_col = c
-                break
-    if piano_col is None:
-        for c in columns:
-            if "piano" in c.lower():
-                piano_col = c
-                break
-
-    # Colonna che rappresenta l'id_comune
-    comune_col = None
-    for c in columns:
-        cl = c.lower()
-        if cl == "id_comune":
-            comune_col = c
-            break
-    if comune_col is None:
-        for c in columns:
-            cl = c.lower()
-            if "comune" in cl and cl.startswith("id_"):
-                comune_col = c
-                break
-    if comune_col is None:
-        for c in columns:
-            if "comune" in c.lower():
-                comune_col = c
-                break
-
-    if piano_col is None or comune_col is None:
-        raise RuntimeError(
-            f"Impossibile individuare le colonne di relazione piano/comune in {TABLE_PS_R_PIANO_COMUNE}."
-        )
 
     conn = None
     try:
         conn = get_connection()
         query = (
-            f'SELECT "{piano_col}" AS id_piano, "{comune_col}" AS id_comune '
+            f"SELECT fk_modulo AS id_piano, fk_comune AS id_comune "
             f"FROM {TABLE_PS_R_PIANO_COMUNE}"
         )
         df = pd.read_sql_query(query, conn)
@@ -843,7 +646,12 @@ with tab_piani:
                 selected_id_tipo_delibera = None
 
             descrizione_piano = st.text_area(
-                "Descrizione del piano", placeholder="Es. Piano comunale di emergenza ..."
+                "Descrizione del piano (ente)",
+                placeholder="Es. Comune di ... - Piano comunale di emergenza ...",
+            )
+            path_file = st.text_input(
+                "Percorso/URL del file del piano (opzionale)",
+                placeholder="Es. \\ileserver\\piani\\piano_comunale.pdf oppure https://...",
             )
             note = st.text_area("Note (opzionale)")
 
@@ -870,6 +678,7 @@ with tab_piani:
                             id_tipo_piano=selected_id_tipo_piano,
                             id_tipo_delibera=selected_id_tipo_delibera,
                             id_comune=selected_id_comune,
+                            path_file=path_file.strip() or None,
                             note=note.strip() or None,
                         )
                         st.success(
