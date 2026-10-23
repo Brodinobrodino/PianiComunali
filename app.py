@@ -439,6 +439,54 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
 
         df["Path"] = df["Path"].apply(_normalize_path)
 
+    # Utility per aprire percorsi locali / UNC in Esplora risorse (solo Windows)
+    def _file_uri_to_windows_path(value: object) -> str:
+        if value is None or (isinstance(value, float) and pd.isna(value)):
+            return ""
+        s = str(value).strip()
+        if not s:
+            return ""
+
+        lower = s.lower()
+        # Rimuoviamo il prefisso file:// se presente
+        if lower.startswith("file://"):
+            s = s[7:]
+
+        # UNC esplicito: \\server\share\...
+        if s.startswith("\\\\") or s.startswith("//"):
+            return s.replace("/", "\\")
+
+        # Percorso con unità disco: C:/..., C:\...
+        if len(s) >= 2 and s[1] == ":":
+            return s.replace("/", "\\")
+
+        # Caso tipo ad.regione.piemonte.it/rp/...
+        parts = s.split("/")
+        if len(parts) > 1:
+            host = parts[0]
+            rest = "\\".join(parts[1:])
+            return f"\\\\{host}\\{rest}"
+
+        return s
+
+    def open_path_in_explorer(value: object) -> None:
+        """Apre il percorso indicato (file o cartella) in Esplora risorse.
+
+        Funziona correttamente quando l'app Streamlit gira su Windows
+        sulla stessa macchina dell'utente (es. localhost).
+        """
+
+        win_path = _file_uri_to_windows_path(value)
+        if not win_path:
+            raise ValueError("Percorso vuoto o non valido")
+
+        # Se è un file, apriamo la cartella che lo contiene
+        if os.path.isfile(win_path):
+            folder = os.path.dirname(win_path)
+            os.startfile(folder)  # type: ignore[attr-defined]
+        else:
+            os.startfile(win_path)  # type: ignore[attr-defined]
+
     # Ordine colonne principale
     ordered_cols = [
         "id_piano",
@@ -565,8 +613,30 @@ with tab_visualizza:
                 use_container_width=True,
                 column_config=column_config,
             )
-    except Exception as e:
-        st.error(f"Errore durante il caricamento della vista integrata dei piani: {e}")
+
+            # Se disponibile un percorso, permetti di aprire la cartella in Esplora risorse
+            if "Path" in df_view.columns:
+                st.markdown("### Apri cartella in Esplora risorse (sul tuo PC)")
+                row_to_open = st.selectbox(
+                    "Seleziona il piano per aprire la cartella associata",
+                    options=list(df_view.itertuples(index=False)),
+                    format_func=lambda row: f"{getattr(row, 'id_piano', '?')} - {getattr(row, 'Piano', '')}",
+                    key="seleziona_piano_apri_cartella",
+                )
+                if row_to_open is not None:
+                    selected_path = getattr(row_to_open, "Path", None)
+                    if selected_path and st.button(
+                        "Apri cartella in Esplora risorse",
+                        key="btn_apri_cartella_explorer",
+                    ):
+                        try:
+                            open_path_in_explorer(selected_path)
+                            st.success("Comando inviato a Esplora risorse.")
+                        except Exception as e_open:
+                            st.error(f"Impossibile aprire la cartella: {e_open}")
+
+     except Exception as e:
+         st.error(f"Errore durante il caricamento della vista integrata dei piani: {e}")
 
     st.markdown("---")
     with st.expander("🔧 Tabelle di base (solo per verifica dati)"):
