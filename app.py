@@ -676,6 +676,9 @@ with tab_visualizza:
                     )
                 df_view = df_view[mask]
 
+            # Indici consecutivi per poter allineare editor e tendina
+            df_view = df_view.reset_index(drop=True)
+
             # Se è presente una colonna "Path", la rendiamo cliccabile come link
             column_config = {}
             if "Path" in df_view.columns:
@@ -684,24 +687,54 @@ with tab_visualizza:
                     display_text="apri",
                 )
 
-            st.dataframe(
-                df_view,
-                use_container_width=True,
-                column_config=column_config,
+            # Aggiungiamo una colonna di selezione per scegliere il piano direttamente dalla tabella
+            SELEZ_COL = "_seleziona"
+            df_view_display = df_view.copy()
+            if SELEZ_COL not in df_view_display.columns:
+                df_view_display[SELEZ_COL] = False
+
+            column_config[SELEZ_COL] = st.column_config.CheckboxColumn(
+                "Seleziona",
+                help="Seleziona il piano su cui lavorare",
+                default=False,
             )
 
+            df_view_edit = st.data_editor(
+                df_view_display,
+                use_container_width=True,
+                column_config=column_config,
+                hide_index=True,
+                key="editor_piani_integrati",
+            )
+
+            # Determina la riga selezionata nella tabella (prima con _seleziona=True)
+            selected_idx = None
+            if SELEZ_COL in df_view_edit.columns:
+                selected_rows = df_view_edit[df_view_edit[SELEZ_COL]]
+                if not selected_rows.empty:
+                    selected_idx = int(selected_rows.index[0])
+
+            # Lista opzioni per la tendina, allineate all'ordine delle righe in df_view_edit
+            options = list(df_view_edit.itertuples(index=False))
+
             # Se disponibile un percorso, permetti di aprire la cartella in Esplora risorse
-            if "Path" in df_view.columns:
+            if "Path" in df_view_edit.columns and options:
                 st.markdown("### Apri cartella in Esplora risorse (sul tuo PC)")
+
+                # Se una riga è stata selezionata nella tabella, usala come default per la tendina
+                default_index = 0
+                if selected_idx is not None and 0 <= selected_idx < len(options):
+                    default_index = selected_idx
+
                 row_to_open = st.selectbox(
                     "Seleziona il piano per aprire la cartella associata",
-                    options=list(df_view.itertuples(index=False)),
+                    options=options,
                     format_func=lambda row: f"{getattr(row, 'id_piano', '?')} - {getattr(row, 'Piano', '')}",
                     key="seleziona_piano_apri_cartella",
+                    index=default_index,
                 )
+
                 if row_to_open is not None:
-                    # Mostra subito il nome del piano selezionato, così l'utente non deve
-                    # ricercarlo visivamente nella tabella.
                     piano_sel = getattr(row_to_open, "Piano", "")
                     st.markdown(f"**Piano selezionato:** {piano_sel}")
 
