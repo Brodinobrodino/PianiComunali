@@ -68,15 +68,67 @@ def load_table(table_name: str, limit: int = 1000) -> pd.DataFrame:
 def get_decodifica_options(table_name: str, id_column: str, desc_column: str) -> pd.DataFrame:
     """Carica una tabella di decodifica restituiendo solo id + descrizione.
 
-    ⚠️ ATTENZIONE: id_column e desc_column devono corrispondere ai nomi REALI
-    delle colonne nel tuo database. Se diversi, modificali qui sotto.
+    I parametri id_column e desc_column vengono usati come "suggerimenti".
+    Se i nomi non corrispondono alle colonne reali, la funzione prova a
+    individuarle automaticamente sulla base dei nomi presenti nel DB.
     """
+
+    # Ricaviamo le colonne effettive della tabella
+    try:
+        columns = get_table_columns(table_name)
+    except Exception as e:
+        raise RuntimeError(
+            f"Impossibile leggere le colonne della tabella {table_name}: {e}"
+        ) from e
+
+    if not columns:
+        raise RuntimeError(
+            f"La tabella {table_name} non contiene colonne oppure non esiste."
+        )
+
+    # Determiniamo la colonna ID
+    id_col = None
+    if id_column in columns:
+        id_col = id_column
+    else:
+        # match case-insensitive
+        for c in columns:
+            if c.lower() == id_column.lower():
+                id_col = c
+                break
+    if id_col is None:
+        for c in columns:
+            if c.lower().startswith("id_"):
+                id_col = c
+                break
+    if id_col is None:
+        id_col = columns[0]
+
+    # Determiniamo la colonna descrittiva
+    desc_col = None
+    if desc_column in columns:
+        desc_col = desc_column
+    else:
+        for c in columns:
+            if c.lower() == desc_column.lower():
+                desc_col = c
+                break
+    if desc_col is None:
+        for c in columns:
+            if any(key in c.lower() for key in ("descr", "desc", "nome", "denom")):
+                desc_col = c
+                break
+    if desc_col is None:
+        desc_col = columns[1] if len(columns) > 1 else id_col
 
     conn = None
     try:
         conn = get_connection()
         # Tabella in minuscolo non quotata, colonne quotate per preservare il nome esatto
-        query = f'SELECT "{id_column}", "{desc_column}" FROM {table_name} ORDER BY "{desc_column}"'
+        query = (
+            f'SELECT "{id_col}", "{desc_col}" '
+            f"FROM {table_name} ORDER BY \"{desc_col}\""
+        )
         df = pd.read_sql_query(query, conn)
         return df
     finally:
@@ -153,16 +205,60 @@ def insert_piano_comunale(
 def get_comuni() -> pd.DataFrame:
     """Ritorna elenco dei comuni.
 
-    Assunzioni (adatta ai tuoi schemi):
-    - Tabella: "ps_geo_comune" (vedi costante TABLE_PS_GEO_COMUNE)
-    - Colonne usate: id_comune (PK), nome_comune (descrizione)
+    Non assume più a priori i nomi delle colonne, ma li ricava dal database.
+    Restituisce sempre un DataFrame con colonne normalizzate:
+    - id_comune
+    - nome_comune
     """
+
+    # Ricaviamo l'elenco delle colonne dalla tabella reale
+    try:
+        columns = get_table_columns(TABLE_PS_GEO_COMUNE)
+    except Exception as e:
+        # Se non riusciamo nemmeno a leggere le colonne, propaghiamo l'errore
+        raise RuntimeError(
+            f"Impossibile leggere le colonne della tabella {TABLE_PS_GEO_COMUNE}: {e}"
+        ) from e
+
+    if not columns:
+        raise RuntimeError(
+            f"La tabella {TABLE_PS_GEO_COMUNE} non contiene colonne oppure non esiste."
+        )
+
+    # Heuristica per identificare la colonna ID e la colonna descrittiva
+    id_col = None
+    for c in columns:
+        c_low = c.lower()
+        if c_low == "id_comune" or c_low.startswith("id_"):
+            id_col = c
+            break
+    if id_col is None:
+        # fallback: prima colonna
+        id_col = columns[0]
+
+    desc_col = None
+    for c in columns:
+        if c == id_col:
+            continue
+        c_low = c.lower()
+        if any(key in c_low for key in ("nome", "denominazione", "descr", "denom")):
+            desc_col = c
+            break
+
+    if desc_col is None:
+        # fallback: seconda colonna, se esiste, altrimenti la stessa dell'id
+        desc_col = columns[1] if len(columns) > 1 else id_col
 
     conn = None
     try:
         conn = get_connection()
-        query = f"SELECT id_comune, nome_comune FROM {TABLE_PS_GEO_COMUNE} ORDER BY nome_comune"
+        query = (
+            f'SELECT "{id_col}" AS id_comune, "{desc_col}" AS nome_comune '
+            f"FROM {TABLE_PS_GEO_COMUNE} ORDER BY \"{desc_col}\""
+        )
         df = pd.read_sql_query(query, conn)
+        # Normalizziamo i nomi delle colonne verso il resto dell'app
+        df.columns = ["id_comune", "nome_comune"]
         return df
     finally:
         if conn is not None:
@@ -186,6 +282,116 @@ def get_last_piani(limit: int = 50) -> pd.DataFrame:
     finally:
         if conn is not None:
             conn.close()
+
+
+def get_relazioni_piano_comune() -> pd.DataFrame:
+    """Restituisce la relazione piano-comune (id_piano, id_comune)."""
+
+    conn = None
+    try:
+        conn = get_connection()
+        query = f"SELECT id_piano, id_comune FROM {TABLE_PS_R_PIANO_COMUNE}"
+        df = pd.read_sql_query(query, conn)
+        return df
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
+    """Restituisce una vista "ad alto livello" dei piani comunali.
+
+    La vista integra:
+    - dati del piano (descrizione, stato, tipo, delibera, note)
+    - comune associato (tramite tabella di relazione)
+
+    Usa le tabelle di decodifica e i comuni tramite merge lato Python
+    per evitare problemi con nomi di colonne leggermente diversi nel DB.
+    """
+
+    df_piani = get_last_piani(limit=limit)
+    if df_piani.empty:
+        return df_piani
+
+    # Relazione piano-comune
+    try:
+        df_rel = get_relazioni_piano_comune()
+    except Exception:
+        # Se la relazione non fosse disponibile, restituiamo solo i piani
+        df_rel = pd.DataFrame(columns=["id_piano", "id_comune"])
+
+    # Decodifiche
+    try:
+        df_comuni = get_comuni()
+    except Exception:
+        df_comuni = pd.DataFrame(columns=["id_comune", "nome_comune"])
+
+    try:
+        df_stato = get_decodifica_options(
+            TABLE_PS_D_STATO_PIANO, "id_stato_piano", "descr_stato_piano"
+        )
+    except Exception:
+        df_stato = pd.DataFrame(columns=["id_stato_piano", "descr_stato_piano"])
+
+    try:
+        df_tipo_piano = get_decodifica_options(
+            TABLE_PS_D_TIPO_PIANO, "id_tipo_piano", "descr_tipo_piano"
+        )
+    except Exception:
+        df_tipo_piano = pd.DataFrame(columns=["id_tipo_piano", "descr_tipo_piano"])
+
+    try:
+        df_tipo_delibera = get_decodifica_options(
+            TABLE_PS_D_TIPO_DELIBERA, "id_tipo_delibera", "descr_tipo_delibera"
+        )
+    except Exception:
+        df_tipo_delibera = pd.DataFrame(
+            columns=["id_tipo_delibera", "descr_tipo_delibera"]
+        )
+
+    # Merge progressivi per comporre la vista integrata
+    df = df_piani.merge(df_rel, on="id_piano", how="left")
+
+    if not df_comuni.empty:
+        df = df.merge(df_comuni, on="id_comune", how="left")
+
+    if not df_stato.empty:
+        df = df.merge(df_stato, on="id_stato_piano", how="left")
+
+    if not df_tipo_piano.empty:
+        df = df.merge(df_tipo_piano, on="id_tipo_piano", how="left")
+
+    if not df_tipo_delibera.empty:
+        df = df.merge(df_tipo_delibera, on="id_tipo_delibera", how="left")
+
+    # Rinominiamo le colonne per una vista più leggibile
+    df = df.rename(
+        columns={
+            "descrizione_piano": "Piano",
+            "nome_comune": "Comune",
+            "descr_stato_piano": "Stato piano",
+            "descr_tipo_piano": "Tipo piano",
+            "descr_tipo_delibera": "Tipo delibera",
+            "note": "Note",
+        }
+    )
+
+    # Ordine colonne principale
+    ordered_cols = [
+        "id_piano",
+        "Piano",
+        "Comune",
+        "Stato piano",
+        "Tipo piano",
+        "Tipo delibera",
+        "Note",
+    ]
+    existing_cols = [c for c in ordered_cols if c in df.columns]
+    # Aggiungiamo eventuali colonne residue in coda
+    remaining_cols = [c for c in df.columns if c not in existing_cols]
+    df = df[existing_cols + remaining_cols]
+
+    return df
 
 
 def get_table_columns(table_name: str) -> list[str]:
@@ -248,17 +454,60 @@ tab_visualizza, tab_piani, tab_generico = st.tabs(
 # TAB 1 - VISUALIZZA TABELLE
 # -----------------------------------------------------------
 with tab_visualizza:
-    st.header("📋 Visualizza tabelle principali")
+    st.header("📋 Piani comunali - vista integrata")
 
-    table_choice = st.selectbox(
-        "Seleziona la tabella da consultare:",
-        options=list(TAB_LABELS.keys()),
-        format_func=lambda key: TAB_LABELS.get(key, key),
+    limit_rows_piani = st.number_input(
+        "Numero massimo di piani da mostrare",
+        min_value=1,
+        max_value=1000,
+        value=100,
+        key="limit_piani_integrati",
+    )
+    filtro_testo = st.text_input(
+        "Filtro veloce (per testo presente in Piano o Comune)",
+        "",
+        key="filtro_piani_integrati",
     )
 
-    limit_rows = st.number_input("Numero massimo di righe da caricare", 1, 10000, 1000)
+    try:
+        df_piani = get_piani_dettaglio(limit=int(limit_rows_piani))
+        if df_piani.empty:
+            st.info("Nessun piano comunale trovato nel database.")
+        else:
+            df_view = df_piani.copy()
 
-    if st.button("Carica dati", key="btn_carica_tabella"):
+            if filtro_testo.strip():
+                pattern = filtro_testo.strip()
+                mask = df_view["Piano"].astype(str).str.contains(
+                    pattern, case=False, na=False
+                )
+                if "Comune" in df_view.columns:
+                    mask = mask | df_view["Comune"].astype(str).str.contains(
+                        pattern, case=False, na=False
+                    )
+                df_view = df_view[mask]
+
+            st.dataframe(df_view, use_container_width=True)
+    except Exception as e:
+        st.error(f"Errore durante il caricamento della vista integrata dei piani: {e}")
+
+    st.markdown("---")
+    with st.expander("🔧 Tabelle di base (solo per verifica dati)"):
+        table_choice = st.selectbox(
+            "Seleziona la tabella da consultare:",
+            options=list(TAB_LABELS.keys()),
+            format_func=lambda key: TAB_LABELS.get(key, key),
+            key="tabella_debug",
+        )
+
+        limit_rows = st.number_input(
+            "Numero massimo di righe da caricare",
+            1,
+            10000,
+            1000,
+            key="limit_tabella_debug",
+        )
+
         try:
             df = load_table(table_choice, limit=int(limit_rows))
             st.success(f"Caricate {len(df)} righe dalla tabella {table_choice}.")
