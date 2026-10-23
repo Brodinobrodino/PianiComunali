@@ -389,25 +389,16 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
     # come link verso http://localhost. Se il valore non inizia già con file://, http://
     # o https://, viene prefissato con file://. Per percorsi UNC (es. \\ileserver\share)
     # convertiamo in file://server/share.
+    # I valori nella colonna "Path" si assumono già essere URL/URI validi
+    # (es. "file://ad.regione.piemonte.it/..." oppure "https://...").
+    # Qui facciamo solo uno strip degli spazi senza modificarne il contenuto,
+    # per evitare di introdurre prefissi doppi o formati non riconosciuti
+    # dal browser aziendale.
     if "Path" in df.columns:
         def _normalize_path(value: object) -> object:
             if pd.isna(value):
                 return value
-            s = str(value).strip()
-            if not s:
-                return s
-            lower = s.lower()
-            # Già un URL/URI utilizzabile dal browser
-            if lower.startswith(("file://", "http://", "https://")):
-                return s
-            # Percorso UNC di Windows (es. \\server\share\cartella\file.pdf)
-            if s.startswith("\\\\"):
-                # es. \\server\share\cartella -> file://server/share/cartella
-                s_clean = s.lstrip("\\")
-                s_clean = s_clean.replace("\\", "/")
-                return f"file://{s_clean}"
-            # Qualsiasi altro percorso viene esposto come file://<percorso>
-            return f"file://{s}"
+            return str(value).strip()
 
         df["Path"] = df["Path"].apply(_normalize_path)
 
