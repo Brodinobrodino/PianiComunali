@@ -421,7 +421,7 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
                 drive = s[0].upper()
                 rest = s[2:].lstrip("\\/")
                 rest = rest.replace("\\", "/")
-                return f"file:///{drive}:/{rest}"
+                return f"file://{drive}:/{rest}"
 
             # Percorso "finto assoluto" usato per share di rete tipo "/ad.regione.piemonte.it/..."
             if s.startswith("/ad.regione.piemonte.it/"):
