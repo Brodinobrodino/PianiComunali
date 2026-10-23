@@ -11,5 +11,8 @@ set DB_USER=peser
 set DB_PASS=peser2013
 set DB_PORT=10101
 
-REM Avvio dell'app Streamlit in locale (nessun accesso a Internet)
-streamlit run app.py
+REM Avvio dell'app Streamlit in locale usando l'interprete Python
+py -m streamlit run app.py
+
+REM Mantieni aperta la finestra per vedere eventuali messaggi/errore
+pause
