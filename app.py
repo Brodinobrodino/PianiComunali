@@ -397,9 +397,10 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
             if not s:
                 return s
             lower = s.lower()
+            # Già un URL/URI utilizzabile dal browser
             if lower.startswith(("file://", "http://", "https://")):
                 return s
-            # Percorso UNC di Windows
+            # Percorso UNC di Windows (es. \\server\share\cartella\file.pdf)
             if s.startswith("\\\\"):
                 # es. \\server\share\cartella -> file://server/share/cartella
                 s_clean = s.lstrip("\\")
