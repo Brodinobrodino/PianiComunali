@@ -673,13 +673,9 @@ with tab_visualizza:
             # Indici consecutivi per poter allineare editor e tendina
             df_view = df_view.reset_index(drop=True)
 
-            # Se è presente una colonna "Path", la rendiamo cliccabile come link
+            # Configurazione colonne per l'editor: nessun link speciale sulla colonna "Path",
+            # così viene mostrato il valore reale proveniente dal database.
             column_config = {}
-            if "Path" in df_view.columns:
-                column_config["Path"] = st.column_config.LinkColumn(
-                    "Path",
-                    display_text="apri",
-                )
 
             # Aggiungiamo una colonna di selezione per scegliere il piano direttamente dalla tabella
             SELEZ_COL = "_seleziona"
