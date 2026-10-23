@@ -269,16 +269,146 @@ def get_comuni() -> pd.DataFrame:
 
 
 def get_last_piani(limit: int = 50) -> pd.DataFrame:
-    """Restituisce gli ultimi piani inseriti (per consultazione veloce)."""
+    """Restituisce gli ultimi piani inseriti (per consultazione veloce).
+
+    Non assume più rigidamente i nomi delle colonne, ma li ricava dal database
+    e li aliassa verso i nomi logici usati dal resto dell'app:
+    - id_piano
+    - descrizione_piano
+    - id_stato_piano
+    - id_tipo_piano
+    - id_tipo_delibera
+    - note
+    """
+
+    # Recuperiamo le colonne effettive della tabella dei piani
+    try:
+        columns = get_table_columns(TABLE_PS_T_ANAGRAFICA_PC)
+    except Exception as e:
+        raise RuntimeError(
+            f"Impossibile leggere le colonne della tabella {TABLE_PS_T_ANAGRAFICA_PC}: {e}"
+        ) from e
+
+    if not columns:
+        raise RuntimeError(
+            f"La tabella {TABLE_PS_T_ANAGRAFICA_PC} non contiene colonne oppure non esiste."
+        )
+
+    # id_piano
+    id_col = None
+    for c in columns:
+        cl = c.lower()
+        if cl == "id_piano":
+            id_col = c
+            break
+    if id_col is None:
+        for c in columns:
+            if c.lower().startswith("id_"):
+                id_col = c
+                break
+    if id_col is None:
+        id_col = columns[0]
+
+    # descrizione_piano
+    desc_col = None
+    for c in columns:
+        cl = c.lower()
+        if "descr" in cl and "piano" in cl:
+            desc_col = c
+            break
+    if desc_col is None:
+        for c in columns:
+            if "descr" in c.lower():
+                desc_col = c
+                break
+
+    # id_stato_piano
+    stato_col = None
+    for c in columns:
+        cl = c.lower()
+        if cl == "id_stato_piano":
+            stato_col = c
+            break
+    if stato_col is None:
+        for c in columns:
+            cl = c.lower()
+            if "stato" in cl and cl.startswith("id_"):
+                stato_col = c
+                break
+    if stato_col is None:
+        for c in columns:
+            if "stato" in c.lower():
+                stato_col = c
+                break
+
+    # id_tipo_piano
+    tipo_piano_col = None
+    for c in columns:
+        cl = c.lower()
+        if cl == "id_tipo_piano":
+            tipo_piano_col = c
+            break
+    if tipo_piano_col is None:
+        for c in columns:
+            cl = c.lower()
+            if "tipo" in cl and "piano" in cl and cl.startswith("id_"):
+                tipo_piano_col = c
+                break
+    if tipo_piano_col is None:
+        for c in columns:
+            cl = c.lower()
+            if "tipo" in cl and "piano" in cl:
+                tipo_piano_col = c
+                break
+
+    # id_tipo_delibera
+    tipo_delibera_col = None
+    for c in columns:
+        cl = c.lower()
+        if cl == "id_tipo_delibera":
+            tipo_delibera_col = c
+            break
+    if tipo_delibera_col is None:
+        for c in columns:
+            cl = c.lower()
+            if "delib" in cl and cl.startswith("id_"):
+                tipo_delibera_col = c
+                break
+    if tipo_delibera_col is None:
+        for c in columns:
+            if "delib" in c.lower():
+                tipo_delibera_col = c
+                break
+
+    # note
+    note_col = None
+    for c in columns:
+        if "note" in c.lower():
+            note_col = c
+            break
+
+    # Costruiamo la lista di colonne da selezionare con alias coerenti
+    select_parts: list[str] = [f'"{id_col}" AS id_piano']
+    if desc_col:
+        select_parts.append(f'"{desc_col}" AS descrizione_piano')
+    if stato_col:
+        select_parts.append(f'"{stato_col}" AS id_stato_piano')
+    if tipo_piano_col:
+        select_parts.append(f'"{tipo_piano_col}" AS id_tipo_piano')
+    if tipo_delibera_col:
+        select_parts.append(f'"{tipo_delibera_col}" AS id_tipo_delibera')
+    if note_col:
+        select_parts.append(f'"{note_col}" AS note')
+
+    select_sql = ", ".join(select_parts)
 
     conn = None
     try:
         conn = get_connection()
         query = (
-            "SELECT p.id_piano, p.descrizione_piano, p.id_stato_piano, "
-            "p.id_tipo_piano, p.id_tipo_delibera, p.note "
-            f"FROM {TABLE_PS_T_ANAGRAFICA_PC} p "
-            "ORDER BY p.id_piano DESC LIMIT %s"
+            f"SELECT {select_sql} "
+            f"FROM {TABLE_PS_T_ANAGRAFICA_PC} "
+            f'ORDER BY "{id_col}" DESC LIMIT %s'
         )
         df = pd.read_sql_query(query, conn, params=(limit,))
         return df
