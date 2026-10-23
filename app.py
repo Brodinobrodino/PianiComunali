@@ -700,6 +700,11 @@ with tab_visualizza:
                     key="seleziona_piano_apri_cartella",
                 )
                 if row_to_open is not None:
+                    # Mostra subito il nome del piano selezionato, così l'utente non deve
+                    # ricercarlo visivamente nella tabella.
+                    piano_sel = getattr(row_to_open, "Piano", "")
+                    st.markdown(f"**Piano selezionato:** {piano_sel}")
+
                     selected_path = getattr(row_to_open, "Path", None)
                     if selected_path and st.button(
                         "Apri cartella in Esplora risorse",
