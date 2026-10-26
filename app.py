@@ -326,7 +326,6 @@ def update_piano_comunale(
 
 
 def get_comuni() -> pd.DataFrame:
->>>>>> REPLACE
     """Ritorna l'elenco dei comuni usando lo schema reale ps_geo_comune.
 
     Colonne restituite (normalizzate per l'app):
@@ -647,7 +646,7 @@ def get_table_columns(table_name: str) -> list[str]:
 
 
 def _file_uri_to_windows_path(value: object) -> str:
-    """Converte un URI/URL o stringa di percorso in un path Windows.
+    r"""Converte un URI/URL o stringa di percorso in un path Windows.
 
     Gestisce:
     - prefisso "file://" o "file:/" (rimossi se presenti)
@@ -717,13 +716,6 @@ def open_path_in_explorer(value: object) -> None:
     else:
         os.startfile(win_path)  # type: ignore[attr-defined]
 
-# -----------------------------------------------------------
-# DIAGNOSTICA CONNESSIONE DATABASE (disattivata per lasciare più spazio alle tabelle)
-# -----------------------------------------------------------
-# In precedenza qui veniva mostrato un riquadro nella sidebar con lo stato
-# della connessione al database. È stato rimosso per non occupare spazio
-# orizzontale e permettere alle tabelle principali di sfruttare tutta la
-# larghezza della pagina.
 
 
 # -----------------------------------------------------------
@@ -1354,7 +1346,6 @@ with tab_piani:
                                         )
         except Exception as e:
             st.error(f"Errore durante il caricamento dei piani: {e}")
->>>>>> REPLACE
 
 
 # -----------------------------------------------------------
@@ -1441,46 +1432,3 @@ with tab_generico:
             )
 
 
-# -----------------------------------------------------------
-# NOTE SU SICUREZZA E UTILIZZO LOCALE
-# -----------------------------------------------------------
-# 1) PARAMETRI DI CONNESSIONE SENZA METTERE PASSWORD NEL CODICE
-#    Puoi valorizzare le variabili d'ambiente prima di avviare Streamlit, ad esempio
-#    su Windows (cmd.exe):
-#       set DB_HOST=10.138.154.6
-#       set DB_NAME=PESER
-#       set DB_USER=peser
-#       set DB_PASS=la_tua_password
-#       set DB_PORT=10101
-#       streamlit run app.py
-#
-#    In alternativa, con Streamlit puoi usare il file .streamlit/secrets.toml
-#    (nella stessa cartella del progetto) con dentro:
-#       [postgres]
-#       host = "10.138.154.6"
-#       dbname = "PESER"
-#       user = "peser"
-#       password = "la_tua_password"
-#       port = 10101
-#
-#    e modificare la funzione get_connection per leggere da st.secrets["postgres"].
-#
-# 2) ESEGUIBILE LOCALE (NESSUN ACCESSO INTERNET)
-#    L'app Streamlit gira già in locale (es. http://localhost:8501) e non
-#    contatta Internet se non lo fai tu esplicitamente nel codice.
-#    Se vuoi un "eseguibile" per la collega, il modo più semplice è creare
-#    un file .bat (Windows) accanto a app.py, contenente ad esempio:
-#        @echo off
-#        cd /d %~dp0
-#        set DB_HOST=10.138.154.6
-#        set DB_NAME=PESER
-#        set DB_USER=peser
-#        set DB_PASS=la_tua_password
-#        set DB_PORT=10101
-#        streamlit run app.py
-#
-#    In questo modo la collega deve solo fare doppio clic sul .bat.
-#
-#    Se preferisci un .exe vero e proprio, puoi valutare PyInstaller, ma per
-#    applicazioni Streamlit nella pratica il .bat è spesso sufficiente e molto
-#    più semplice da gestire.
