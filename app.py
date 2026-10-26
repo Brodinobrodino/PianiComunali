@@ -582,7 +582,7 @@ with tab_gestione:
     limit_rows_piani = st.number_input(
         "Numero massimo di piani da mostrare",
         min_value=1,
-        max_value=1000,
+        max_value=10000,
         value=100,
         key="limit_piani_integrati",
     )
