@@ -35,7 +35,7 @@ TABLE_PS_R_TM_TP = "ps_r_tm_tp"
 # FUNZIONI DI SERVIZIO PER IL DATABASE
 # -----------------------------------------------------------
 
-def get_connection():
+def get_connection() -> psycopg2.extensions.connection:
     """Restituisce una connessione psycopg2 al database."""
 
     return psycopg2.connect(
@@ -48,7 +48,7 @@ def get_connection():
 
 
 def load_table(table_name: str, limit: int = 1000) -> pd.DataFrame:
-    """Carica i primi N record da una tabella."""
+    """Carica i primi N record da una tabella generica."""
 
     conn = None
     try:
@@ -81,14 +81,7 @@ def get_table_columns(table_name: str) -> list[str]:
 def get_decodifica_options(
     table_name: str, id_column: str, desc_column: str
 ) -> pd.DataFrame:
-    """Carica una tabella di decodifica restituendo solo id + descrizione.
-
-    I parametri id_column e desc_column vengono usati come "suggerimenti".
-    Se i nomi non corrispondono alle colonne reali, la funzione prova a
-    individuarle automaticamente sulla base dei nomi presenti nel DB e
-    restituisce comunque un DataFrame con colonne chiamate esattamente
-    come id_column e desc_column.
-    """
+    """Carica una tabella di decodifica restituendo solo id + descrizione."""
 
     try:
         columns = get_table_columns(table_name)
@@ -102,7 +95,6 @@ def get_decodifica_options(
             f"La tabella {table_name} non contiene colonne oppure non esiste."
         )
 
-    # Colonna ID effettiva
     id_col = None
     if id_column in columns:
         id_col = id_column
@@ -119,7 +111,6 @@ def get_decodifica_options(
     if id_col is None:
         id_col = columns[0]
 
-    # Colonna descrittiva effettiva
     desc_col = None
     if desc_column in columns:
         desc_col = desc_column
@@ -379,7 +370,7 @@ def get_relazioni_piano_comune() -> pd.DataFrame:
 
 
 def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
-    """Restituisce una vista integrata dei piani comunali."""
+    """Restituisce una vista integrata dei piani comunali senza modificare il path."""
 
     df_piani = get_last_piani(limit=limit)
     if df_piani.empty:
@@ -451,78 +442,6 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
     if path_col is not None and path_col != "Path":
         df = df.rename(columns={path_col: "Path"})
 
-    if "Path" in df.columns:
-
-        def _normalize_path(value: object) -> object:
-            if pd.isna(value):
-                return value
-            s = str(value).strip()
-            if not s:
-                return s
-
-            lower = s.lower()
-            if lower.startswith("file:") or lower.startswith(("http://", "https://")):
-                return s
-
-            if s.startswith("\\\\"):
-                s_clean = s.lstrip("\\")
-                s_clean = s_clean.replace("\\", "/")
-                return f"file:/{s_clean}"
-
-            if len(s) >= 3 and s[1] == ":" and s[2] in ("\\", "/"):
-                drive = s[0].upper()
-                rest = s[2:].lstrip("\\/")
-                rest = rest.replace("\\", "/")
-                return f"file:/{drive}:/{rest}"
-
-            if s.startswith("/ad.regione.piemonte.it/"):
-                s_clean = s.lstrip("/")
-                return f"file:/{s_clean}"
-
-            if s.startswith("/"):
-                return f"file:/{s}"
-
-            return f"file:/{s}"
-
-        df["Path"] = df["Path"].apply(_normalize_path)
-
-    def _file_uri_to_windows_path_local(value: object) -> str:
-        if value is None or (isinstance(value, float) and pd.isna(value)):
-            return ""
-        s = str(value).strip()
-        if not s:
-            return ""
-
-        lower = s.lower()
-        if lower.startswith("file://"):
-            s = s[7:]
-
-        if s.startswith("\\\\") or s.startswith("//"):
-            return s.replace("/", "\\")
-
-        if len(s) >= 2 and s[1] == ":":
-            return s.replace("/", "\\")
-
-        parts = s.split("/")
-        if len(parts) > 1:
-            host = parts[0]
-            rest = "\\".join(parts[1:])
-            return f"\\\\{host}\\{rest}"
-
-        return s
-
-    def open_path_in_explorer_local(value: object) -> None:
-        win_path = _file_uri_to_windows_path_local(value)
-        if not win_path:
-            raise ValueError("Percorso vuoto o non valido")
-        if os.path.isfile(win_path):
-            folder = os.path.dirname(win_path)
-            os.startfile(folder)  # type: ignore[attr-defined]
-        else:
-            os.startfile(win_path)  # type: ignore[attr-defined]
-
-    df.__dict__["_open_path_func"] = open_path_in_explorer_local  # attach helper
-
     ordered_cols = [
         "id_piano",
         "Piano",
@@ -547,14 +466,7 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
 
 
 def _file_uri_to_windows_path(value: object) -> str:
-    r"""Converte un URI/URL o stringa di percorso in un path Windows.
-
-    Gestisce:
-    - prefisso "file://" o "file:/" (rimossi se presenti)
-    - percorsi UNC espliciti (\\server\share\... oppure //server/share/...)
-    - percorsi con unita disco locali (C:/..., C:\\...)
-    - forme "host\\share\\cartella..." o "host/path/..." convertite in UNC \\host\share\...
-    """
+    r"""Converte un URI/URL o stringa di percorso in un path Windows."""
 
     if value is None or (isinstance(value, float) and pd.isna(value)):
         return ""
@@ -650,6 +562,8 @@ with tab_gestione:
         key="filtro_piani_integrati",
     )
 
+    df_view_edit: pd.DataFrame | None = None
+    selected_idx: int | None = None
     selected_piano_id: int | None = None
 
     try:
@@ -696,60 +610,11 @@ with tab_gestione:
                 key="editor_piani_integrati",
             )
 
-            selected_idx = None
             if SELEZ_COL in df_view_edit.columns:
                 selected_rows = df_view_edit[df_view_edit[SELEZ_COL]]
                 if not selected_rows.empty:
                     selected_idx = int(selected_rows.index[0])
 
-            num_rows = len(df_view_edit)
-            indices = list(range(num_rows))
-
-            if "Path" in df_view_edit.columns and num_rows > 0:
-                st.markdown("### Apri cartella in Esplora risorse (sul tuo PC)")
-
-                state_key = "seleziona_piano_apri_cartella"
-
-                if selected_idx is not None and 0 <= selected_idx < num_rows:
-                    st.session_state[state_key] = selected_idx
-                elif state_key not in st.session_state:
-                    st.session_state[state_key] = 0
-
-                def _format_piano(idx: int) -> str:
-                    try:
-                        row = df_view_edit.iloc[idx]
-                    except Exception:
-                        return str(idx)
-                    return f"{row.get('id_piano', '?')} - {row.get('Piano', '')}"
-
-                selected_idx_box = st.selectbox(
-                    "Seleziona il piano per aprire la cartella associata",
-                    options=indices,
-                    format_func=_format_piano,
-                    key=state_key,
-                )
-
-                try:
-                    row_to_open = df_view_edit.iloc[selected_idx_box]
-                except Exception:
-                    row_to_open = None
-
-                if row_to_open is not None:
-                    piano_sel = row_to_open.get("Piano", "")
-                    st.markdown(f"**Piano selezionato:** {piano_sel}")
-
-                    selected_path = row_to_open.get("Path", None)
-                    if selected_path and st.button(
-                        "Apri cartella in Esplora risorse",
-                        key="btn_apri_cartella_explorer",
-                    ):
-                        try:
-                            open_path_in_explorer(selected_path)
-                            st.success("Comando inviato a Esplora risorse.")
-                        except Exception as e_open:
-                            st.error(f"Impossibile aprire la cartella: {e_open}")
-
-            # Piano corrente per la sezione di modifica (dipende dalla selezione nella vista principale)
             if selected_idx is not None and 0 <= selected_idx < len(df_view_edit):
                 try:
                     row_sel_edit = df_view_edit.iloc[selected_idx]
@@ -761,375 +626,417 @@ with tab_gestione:
     except Exception as e:
         st.error(f"Errore durante il caricamento della vista integrata dei piani: {e}")
 
-    st.markdown("---")
-    st.subheader("Nuovo piano")
-
-    # Sezione INSERIMENTO NUOVO PIANO
-    try:
-        df_comuni_new = get_comuni()
-    except Exception as e:
-        st.error(
-            f"Errore nel caricamento dei comuni dalla tabella {TABLE_PS_GEO_COMUNE}: {e}"
-        )
-        df_comuni_new = pd.DataFrame(columns=["id_comune", "nome_comune"])
-
-    try:
-        df_stato_new = get_decodifica_options(
-            TABLE_PS_D_STATO_PIANO, "id_stato_piano", "descr_stato_piano"
-        )
-    except Exception as e:
-        st.error(
-            f"Errore nel caricamento degli stati piano dalla tabella {TABLE_PS_D_STATO_PIANO}: {e}"
-        )
-        df_stato_new = pd.DataFrame(columns=["id_stato_piano", "descr_stato_piano"])
-
-    try:
-        df_tipo_piano_new = get_decodifica_options(
-            TABLE_PS_D_TIPO_PIANO, "id_tipo_piano", "descr_tipo_piano"
-        )
-    except Exception as e:
-        st.error(
-            f"Errore nel caricamento dei tipi piano dalla tabella {TABLE_PS_D_TIPO_PIANO}: {e}"
-        )
-        df_tipo_piano_new = pd.DataFrame(columns=["id_tipo_piano", "descr_tipo_piano"])
-
-    try:
-        df_tipo_delibera_new = get_decodifica_options(
-            TABLE_PS_D_TIPO_DELIBERA, "id_tipo_delibera", "descr_tipo_delibera"
-        )
-    except Exception as e:
-        st.error(
-            f"Errore nel caricamento dei tipi delibera dalla tabella {TABLE_PS_D_TIPO_DELIBERA}: {e}"
-        )
-        df_tipo_delibera_new = pd.DataFrame(
-            columns=["id_tipo_delibera", "descr_tipo_delibera"]
-        )
-
-    with st.form("form_nuovo_piano", clear_on_submit=False):
-        if not df_comuni_new.empty:
-            comune_obj = st.selectbox(
-                "Comune",
-                options=list(df_comuni_new.itertuples(index=False)),
-                format_func=lambda row: f"{row.id_comune} - {row.nome_comune}",
+    # SOTTOSEZIONE 1: APRI CARTELLA
+    with st.expander("📂 Apri cartella in Esplora risorse (sul tuo PC)"):
+        if df_view_edit is None or df_view_edit.empty or "Path" not in df_view_edit.columns:
+            st.info(
+                "La vista principale non contiene una colonna 'Path' o non ci sono piani da mostrare."
             )
-            selected_id_comune_new = int(comune_obj.id_comune)
-        else:
-            st.warning(f"Nessun comune trovato nella tabella {TABLE_PS_GEO_COMUNE}.")
-            selected_id_comune_new = None
-
-        if not df_stato_new.empty:
-            stato_obj = st.selectbox(
-                "Stato piano",
-                options=list(df_stato_new.itertuples(index=False)),
-                format_func=lambda row: f"{row.id_stato_piano} - {row.descr_stato_piano}",
+        elif selected_idx is None:
+            st.info(
+                "Seleziona un piano nella tabella (colonna 'Seleziona') per poter aprire la cartella."
             )
-            selected_id_stato_new = int(stato_obj.id_stato_piano)
         else:
-            st.warning(f"Tabella {TABLE_PS_D_STATO_PIANO} vuota o non leggibile.")
-            selected_id_stato_new = None
+            try:
+                row_to_open = df_view_edit.iloc[selected_idx]
+            except Exception:
+                row_to_open = None
 
-        if not df_tipo_piano_new.empty:
-            tp_obj = st.selectbox(
-                "Tipo piano",
-                options=list(df_tipo_piano_new.itertuples(index=False)),
-                format_func=lambda row: f"{row.id_tipo_piano} - {row.descr_tipo_piano}",
-            )
-            selected_id_tipo_piano_new = int(tp_obj.id_tipo_piano)
-        else:
-            st.warning(f"Tabella {TABLE_PS_D_TIPO_PIANO} vuota o non leggibile.")
-            selected_id_tipo_piano_new = None
-
-        if not df_tipo_delibera_new.empty:
-            td_obj = st.selectbox(
-                "Tipo delibera",
-                options=list(df_tipo_delibera_new.itertuples(index=False)),
-                format_func=lambda row: f"{row.id_tipo_delibera} - {row.descr_tipo_delibera}",
-            )
-            selected_id_tipo_delibera_new = int(td_obj.id_tipo_delibera)
-        else:
-            st.warning(f"Tabella {TABLE_PS_D_TIPO_DELIBERA} vuota o non leggibile.")
-            selected_id_tipo_delibera_new = None
-
-        descrizione_piano_new = st.text_area(
-            "Descrizione del piano (ente)",
-            placeholder="Es. Comune di ... - Piano comunale di emergenza ...",
-        )
-        path_file_new = st.text_input(
-            "Percorso/URL del file del piano (opzionale)",
-            placeholder="Es. \\\\fileserver\\piani\\piano_comunale.pdf oppure https://...",
-        )
-        note_new = st.text_area("Note (opzionale)")
-
-        submit_piano_new = st.form_submit_button("Salva nuovo piano nel database")
-
-        if submit_piano_new:
-            if (
-                selected_id_comune_new is None
-                or selected_id_stato_new is None
-                or selected_id_tipo_piano_new is None
-                or selected_id_tipo_delibera_new is None
-            ):
-                st.error(
-                    "Verifica che le tabelle di decodifica e dei comuni contengano dati "
-                    "e che le colonne usate nel codice corrispondano a quelle del DB."
-                )
-            elif not descrizione_piano_new.strip():
-                st.error("La descrizione del piano è obbligatoria.")
+            if row_to_open is None:
+                st.info("Impossibile individuare la riga selezionata.")
             else:
+                piano_sel = row_to_open.get("Piano", "")
+                selected_path = row_to_open.get("Path", None)
+                st.markdown(f"**Piano selezionato:** {piano_sel}")
+                st.markdown(f"**Path:** {selected_path if selected_path else '-'}")
+
+                if selected_path and st.button("Apri cartella in Esplora risorse"):
+                    try:
+                        open_path_in_explorer(selected_path)
+                        st.success("Comando inviato a Esplora risorse.")
+                    except Exception as e_open:
+                        st.error(f"Impossibile aprire la cartella: {e_open}")
+
+    # SOTTOSEZIONE 2: MODIFICA PIANO ESISTENTE
+    with st.expander("✏️ Modifica piano esistente"):
+        if selected_piano_id is None:
+            st.info(
+                "Seleziona un piano dalla tabella in alto (colonna 'Seleziona') per poterlo modificare."
+            )
+        else:
+            try:
+                dati_piano = get_piano_dettaglio_by_id(selected_piano_id)
+            except Exception as e_det:
+                st.error(
+                    f"Errore nel caricamento dei dettagli del piano {selected_piano_id}: {e_det}"
+                )
+                dati_piano = None
+
+            if not dati_piano:
+                st.info("Impossibile caricare i dettagli del piano selezionato.")
+            else:
+                st.markdown(
+                    "Modifica i campi sottostanti e premi **Aggiorna piano** "
+                    "per salvare le modifiche nel database."
+                )
+
                 try:
-                    new_id = insert_piano_comunale(
-                        descrizione_piano=descrizione_piano_new.strip(),
-                        id_stato_piano=selected_id_stato_new,
-                        id_tipo_piano=selected_id_tipo_piano_new,
-                        id_tipo_delibera=selected_id_tipo_delibera_new,
-                        id_comune=selected_id_comune_new,
-                        path_file=path_file_new.strip() or None,
-                        note=note_new.strip() or None,
+                    df_comuni_edit = get_comuni()
+                except Exception as e:
+                    st.error(
+                        f"Errore nel caricamento dei comuni dalla tabella {TABLE_PS_GEO_COMUNE}: {e}"
                     )
-                    st.success(
-                        f"Piano inserito correttamente con id_piano = {new_id}."
+                    df_comuni_edit = pd.DataFrame(
+                        columns=["id_comune", "nome_comune"]
+                    )
+
+                try:
+                    df_stato_edit = get_decodifica_options(
+                        TABLE_PS_D_STATO_PIANO,
+                        "id_stato_piano",
+                        "descr_stato_piano",
                     )
                 except Exception as e:
-                    st.error(f"Errore durante l'inserimento del piano: {e}")
-
-    st.markdown("---")
-    st.subheader("Modifica piano esistente")
-
-    if selected_piano_id is None:
-        st.info(
-            "Seleziona un piano dalla tabella in alto (colonna 'Seleziona') per poterlo modificare."
-        )
-    else:
-        try:
-            dati_piano = get_piano_dettaglio_by_id(selected_piano_id)
-        except Exception as e_det:
-            st.error(
-                f"Errore nel caricamento dei dettagli del piano {selected_piano_id}: {e_det}"
-            )
-            dati_piano = None
-
-        if dati_piano:
-            st.markdown(
-                "Modifica i campi sottostanti e premi **Aggiorna piano** "
-                "per salvare le modifiche nel database."
-            )
-
-            try:
-                df_comuni_edit = get_comuni()
-            except Exception as e:
-                st.error(
-                    f"Errore nel caricamento dei comuni dalla tabella {TABLE_PS_GEO_COMUNE}: {e}"
-                )
-                df_comuni_edit = pd.DataFrame(columns=["id_comune", "nome_comune"])
-
-            try:
-                df_stato_edit = get_decodifica_options(
-                    TABLE_PS_D_STATO_PIANO,
-                    "id_stato_piano",
-                    "descr_stato_piano",
-                )
-            except Exception as e:
-                st.error(
-                    f"Errore nel caricamento degli stati piano dalla tabella {TABLE_PS_D_STATO_PIANO}: {e}"
-                )
-                df_stato_edit = pd.DataFrame(
-                    columns=["id_stato_piano", "descr_stato_piano"]
-                )
-
-            try:
-                df_tipo_piano_edit = get_decodifica_options(
-                    TABLE_PS_D_TIPO_PIANO,
-                    "id_tipo_piano",
-                    "descr_tipo_piano",
-                )
-            except Exception as e:
-                st.error(
-                    f"Errore nel caricamento dei tipi piano dalla tabella {TABLE_PS_D_TIPO_PIANO}: {e}"
-                )
-                df_tipo_piano_edit = pd.DataFrame(
-                    columns=["id_tipo_piano", "descr_tipo_piano"]
-                )
-
-            try:
-                df_tipo_delibera_edit = get_decodifica_options(
-                    TABLE_PS_D_TIPO_DELIBERA,
-                    "id_tipo_delibera",
-                    "descr_tipo_delibera",
-                )
-            except Exception as e:
-                st.error(
-                    f"Errore nel caricamento dei tipi delibera dalla tabella {TABLE_PS_D_TIPO_DELIBERA}: {e}"
-                )
-                df_tipo_delibera_edit = pd.DataFrame(
-                    columns=["id_tipo_delibera", "descr_tipo_delibera"]
-                )
-
-            with st.form(
-                f"form_modifica_piano_{selected_piano_id}",
-                clear_on_submit=False,
-            ):
-                id_comune_corrente = dati_piano.get("id_comune")
-                if not df_comuni_edit.empty:
-                    opzioni_comuni = list(df_comuni_edit.itertuples(index=False))
-                    index_comune_default = 0
-                    if id_comune_corrente is not None:
-                        for i, row in enumerate(opzioni_comuni):
-                            if int(row.id_comune) == int(id_comune_corrente):
-                                index_comune_default = i
-                                break
-                    comune_sel = st.selectbox(
-                        "Comune",
-                        options=opzioni_comuni,
-                        index=index_comune_default,
-                        format_func=lambda row: f"{row.id_comune} - {row.nome_comune}",
-                        key=f"edit_comune_{selected_piano_id}",
+                    st.error(
+                        f"Errore nel caricamento degli stati piano dalla tabella {TABLE_PS_D_STATO_PIANO}: {e}"
                     )
-                    id_comune_nuovo = int(comune_sel.id_comune)
-                else:
-                    st.warning(
-                        f"Nessun comune trovato nella tabella {TABLE_PS_GEO_COMUNE}."
-                    )
-                    id_comune_nuovo = (
-                        int(id_comune_corrente)
-                        if id_comune_corrente is not None
-                        else None
+                    df_stato_edit = pd.DataFrame(
+                        columns=["id_stato_piano", "descr_stato_piano"]
                     )
 
-                id_stato_corrente = dati_piano.get("id_stato_piano")
-                if not df_stato_edit.empty:
-                    opzioni_stato = list(df_stato_edit.itertuples(index=False))
-                    index_stato_default = 0
-                    if id_stato_corrente is not None:
-                        for i, row in enumerate(opzioni_stato):
-                            if int(row.id_stato_piano) == int(id_stato_corrente):
-                                index_stato_default = i
-                                break
-                    stato_sel = st.selectbox(
-                        "Stato piano",
-                        options=opzioni_stato,
-                        index=index_stato_default,
-                        format_func=lambda row: f"{row.id_stato_piano} - {row.descr_stato_piano}",
-                        key=f"edit_stato_{selected_piano_id}",
+                try:
+                    df_tipo_piano_edit = get_decodifica_options(
+                        TABLE_PS_D_TIPO_PIANO,
+                        "id_tipo_piano",
+                        "descr_tipo_piano",
                     )
-                    id_stato_nuovo = int(stato_sel.id_stato_piano)
-                else:
-                    st.warning(
-                        f"Tabella {TABLE_PS_D_STATO_PIANO} vuota o non leggibile."
+                except Exception as e:
+                    st.error(
+                        f"Errore nel caricamento dei tipi piano dalla tabella {TABLE_PS_D_TIPO_PIANO}: {e}"
                     )
-                    id_stato_nuovo = (
-                        int(id_stato_corrente)
-                        if id_stato_corrente is not None
-                        else None
+                    df_tipo_piano_edit = pd.DataFrame(
+                        columns=["id_tipo_piano", "descr_tipo_piano"]
                     )
 
-                id_tipo_piano_corrente = dati_piano.get("id_tipo_piano")
-                if not df_tipo_piano_edit.empty:
-                    opzioni_tp = list(df_tipo_piano_edit.itertuples(index=False))
-                    index_tp_default = 0
-                    if id_tipo_piano_corrente is not None:
-                        for i, row in enumerate(opzioni_tp):
-                            if int(row.id_tipo_piano) == int(id_tipo_piano_corrente):
-                                index_tp_default = i
-                                break
-                    tp_sel = st.selectbox(
-                        "Tipo piano",
-                        options=opzioni_tp,
-                        index=index_tp_default,
-                        format_func=lambda row: f"{row.id_tipo_piano} - {row.descr_tipo_piano}",
-                        key=f"edit_tp_{selected_piano_id}",
+                try:
+                    df_tipo_delibera_edit = get_decodifica_options(
+                        TABLE_PS_D_TIPO_DELIBERA,
+                        "id_tipo_delibera",
+                        "descr_tipo_delibera",
                     )
-                    id_tipo_piano_nuovo = int(tp_sel.id_tipo_piano)
-                else:
-                    st.warning(
-                        f"Tabella {TABLE_PS_D_TIPO_PIANO} vuota o non leggibile."
+                except Exception as e:
+                    st.error(
+                        f"Errore nel caricamento dei tipi delibera dalla tabella {TABLE_PS_D_TIPO_DELIBERA}: {e}"
                     )
-                    id_tipo_piano_nuovo = (
-                        int(id_tipo_piano_corrente)
-                        if id_tipo_piano_corrente is not None
-                        else None
+                    df_tipo_delibera_edit = pd.DataFrame(
+                        columns=["id_tipo_delibera", "descr_tipo_delibera"]
                     )
 
-                id_tipo_delibera_corrente = dati_piano.get("id_tipo_delibera")
-                if not df_tipo_delibera_edit.empty:
-                    opzioni_td = list(df_tipo_delibera_edit.itertuples(index=False))
-                    index_td_default = 0
-                    if id_tipo_delibera_corrente is not None:
-                        for i, row in enumerate(opzioni_td):
-                            if int(row.id_tipo_delibera) == int(
-                                id_tipo_delibera_corrente
-                            ):
-                                index_td_default = i
-                                break
-                    td_sel = st.selectbox(
-                        "Tipo delibera",
-                        options=opzioni_td,
-                        index=index_td_default,
-                        format_func=lambda row: f"{row.id_tipo_delibera} - {row.descr_tipo_delibera}",
-                        key=f"edit_td_{selected_piano_id}",
-                    )
-                    id_tipo_delibera_nuovo = int(td_sel.id_tipo_delibera)
-                else:
-                    st.warning(
-                        f"Tabella {TABLE_PS_D_TIPO_DELIBERA} vuota o non leggibile."
-                    )
-                    id_tipo_delibera_nuovo = (
-                        int(id_tipo_delibera_corrente)
-                        if id_tipo_delibera_corrente is not None
-                        else None
-                    )
-
-                descrizione_nuova = st.text_area(
-                    "Descrizione del piano (ente)",
-                    value=str(dati_piano.get("descrizione_piano") or ""),
-                    key=f"edit_descr_{selected_piano_id}",
-                )
-                path_nuovo = st.text_input(
-                    "Percorso/URL del file del piano (opzionale)",
-                    value=str(dati_piano.get("path_file") or ""),
-                    key=f"edit_path_{selected_piano_id}",
-                )
-                note_nuove = st.text_area(
-                    "Note (opzionale)",
-                    value=str(dati_piano.get("note") or ""),
-                    key=f"edit_note_{selected_piano_id}",
-                )
-
-                submit_update = st.form_submit_button("Aggiorna piano")
-
-                if submit_update:
-                    if (
-                        id_comune_nuovo is None
-                        or id_stato_nuovo is None
-                        or id_tipo_piano_nuovo is None
-                        or id_tipo_delibera_nuovo is None
-                    ):
-                        st.error(
-                            "Verifica che le tabelle di decodifica e dei comuni contengano dati "
-                            "e che le colonne usate nel codice corrispondano a quelle del DB."
+                with st.form(
+                    f"form_modifica_piano_{selected_piano_id}",
+                    clear_on_submit=False,
+                ):
+                    id_comune_corrente = dati_piano.get("id_comune")
+                    if not df_comuni_edit.empty:
+                        opzioni_comuni = list(df_comuni_edit.itertuples(index=False))
+                        index_comune_default = 0
+                        if id_comune_corrente is not None:
+                            for i, row in enumerate(opzioni_comuni):
+                                if int(row.id_comune) == int(id_comune_corrente):
+                                    index_comune_default = i
+                                    break
+                        comune_sel = st.selectbox(
+                            "Comune",
+                            options=opzioni_comuni,
+                            index=index_comune_default,
+                            format_func=lambda row: f"{row.id_comune} - {row.nome_comune}",
+                            key=f"edit_comune_{selected_piano_id}",
                         )
-                    elif not descrizione_nuova.strip():
-                        st.error("La descrizione del piano è obbligatoria.")
+                        id_comune_nuovo = int(comune_sel.id_comune)
                     else:
-                        try:
-                            update_piano_comunale(
-                                id_piano=selected_piano_id,
-                                descrizione_piano=descrizione_nuova.strip(),
-                                id_stato_piano=id_stato_nuovo,
-                                id_tipo_piano=id_tipo_piano_nuovo,
-                                id_tipo_delibera=id_tipo_delibera_nuovo,
-                                id_comune=id_comune_nuovo,
-                                path_file=path_nuovo.strip() or None,
-                                note=note_nuove.strip() or None,
-                            )
-                            st.success(
-                                f"Piano {selected_piano_id} aggiornato correttamente."
-                            )
-                        except Exception as e_upd:
+                        st.warning(
+                            f"Nessun comune trovato nella tabella {TABLE_PS_GEO_COMUNE}."
+                        )
+                        id_comune_nuovo = (
+                            int(id_comune_corrente)
+                            if id_comune_corrente is not None
+                            else None
+                        )
+
+                    id_stato_corrente = dati_piano.get("id_stato_piano")
+                    if not df_stato_edit.empty:
+                        opzioni_stato = list(df_stato_edit.itertuples(index=False))
+                        index_stato_default = 0
+                        if id_stato_corrente is not None:
+                            for i, row in enumerate(opzioni_stato):
+                                if int(row.id_stato_piano) == int(id_stato_corrente):
+                                    index_stato_default = i
+                                    break
+                        stato_sel = st.selectbox(
+                            "Stato piano",
+                            options=opzioni_stato,
+                            index=index_stato_default,
+                            format_func=lambda row: f"{row.id_stato_piano} - {row.descr_stato_piano}",
+                            key=f"edit_stato_{selected_piano_id}",
+                        )
+                        id_stato_nuovo = int(stato_sel.id_stato_piano)
+                    else:
+                        st.warning(
+                            f"Tabella {TABLE_PS_D_STATO_PIANO} vuota o non leggibile."
+                        )
+                        id_stato_nuovo = (
+                            int(id_stato_corrente)
+                            if id_stato_corrente is not None
+                            else None
+                        )
+
+                    id_tipo_piano_corrente = dati_piano.get("id_tipo_piano")
+                    if not df_tipo_piano_edit.empty:
+                        opzioni_tp = list(df_tipo_piano_edit.itertuples(index=False))
+                        index_tp_default = 0
+                        if id_tipo_piano_corrente is not None:
+                            for i, row in enumerate(opzioni_tp):
+                                if int(row.id_tipo_piano) == int(id_tipo_piano_corrente):
+                                    index_tp_default = i
+                                    break
+                        tp_sel = st.selectbox(
+                            "Tipo piano",
+                            options=opzioni_tp,
+                            index=index_tp_default,
+                            format_func=lambda row: f"{row.id_tipo_piano} - {row.descr_tipo_piano}",
+                            key=f"edit_tp_{selected_piano_id}",
+                        )
+                        id_tipo_piano_nuovo = int(tp_sel.id_tipo_piano)
+                    else:
+                        st.warning(
+                            f"Tabella {TABLE_PS_D_TIPO_PIANO} vuota o non leggibile."
+                        )
+                        id_tipo_piano_nuovo = (
+                            int(id_tipo_piano_corrente)
+                            if id_tipo_piano_corrente is not None
+                            else None
+                        )
+
+                    id_tipo_delibera_corrente = dati_piano.get("id_tipo_delibera")
+                    if not df_tipo_delibera_edit.empty:
+                        opzioni_td = list(df_tipo_delibera_edit.itertuples(index=False))
+                        index_td_default = 0
+                        if id_tipo_delibera_corrente is not None:
+                            for i, row in enumerate(opzioni_td):
+                                if int(row.id_tipo_delibera) == int(
+                                    id_tipo_delibera_corrente
+                                ):
+                                    index_td_default = i
+                                    break
+                        td_sel = st.selectbox(
+                            "Tipo delibera",
+                            options=opzioni_td,
+                            index=index_td_default,
+                            format_func=lambda row: f"{row.id_tipo_delibera} - {row.descr_tipo_delibera}",
+                            key=f"edit_td_{selected_piano_id}",
+                        )
+                        id_tipo_delibera_nuovo = int(td_sel.id_tipo_delibera)
+                    else:
+                        st.warning(
+                            f"Tabella {TABLE_PS_D_TIPO_DELIBERA} vuota o non leggibile."
+                        )
+                        id_tipo_delibera_nuovo = (
+                            int(id_tipo_delibera_corrente)
+                            if id_tipo_delibera_corrente is not None
+                            else None
+                        )
+
+                    descrizione_nuova = st.text_area(
+                        "Descrizione del piano (ente)",
+                        value=str(dati_piano.get("descrizione_piano") or ""),
+                        key=f"edit_descr_{selected_piano_id}",
+                    )
+                    path_nuovo = st.text_input(
+                        "Percorso/URL del file del piano (opzionale)",
+                        value=str(dati_piano.get("path_file") or ""),
+                        key=f"edit_path_{selected_piano_id}",
+                    )
+                    note_nuove = st.text_area(
+                        "Note (opzionale)",
+                        value=str(dati_piano.get("note") or ""),
+                        key=f"edit_note_{selected_piano_id}",
+                    )
+
+                    submit_update = st.form_submit_button("Aggiorna piano")
+
+                    if submit_update:
+                        if (
+                            id_comune_nuovo is None
+                            or id_stato_nuovo is None
+                            or id_tipo_piano_nuovo is None
+                            or id_tipo_delibera_nuovo is None
+                        ):
                             st.error(
-                                f"Errore durante l'aggiornamento del piano: {e_upd}"
+                                "Verifica che le tabelle di decodifica e dei comuni contengano dati "
+                                "e che le colonne usate nel codice corrispondano a quelle del DB."
                             )
-        else:
-            st.info("Impossibile caricare i dettagli del piano selezionato.")
+                        elif not descrizione_nuova.strip():
+                            st.error("La descrizione del piano è obbligatoria.")
+                        else:
+                            try:
+                                update_piano_comunale(
+                                    id_piano=selected_piano_id,
+                                    descrizione_piano=descrizione_nuova.strip(),
+                                    id_stato_piano=id_stato_nuovo,
+                                    id_tipo_piano=id_tipo_piano_nuovo,
+                                    id_tipo_delibera=id_tipo_delibera_nuovo,
+                                    id_comune=id_comune_nuovo,
+                                    path_file=path_nuovo.strip() or None,
+                                    note=note_nuove.strip() or None,
+                                )
+                                st.success(
+                                    f"Piano {selected_piano_id} aggiornato correttamente."
+                                )
+                            except Exception as e_upd:
+                                st.error(
+                                    f"Errore durante l'aggiornamento del piano: {e_upd}"
+                                )
+
+    # SOTTOSEZIONE 3: NUOVO PIANO
+    with st.expander("➕ Nuovo piano"):
+        try:
+            df_comuni_new = get_comuni()
+        except Exception as e:
+            st.error(
+                f"Errore nel caricamento dei comuni dalla tabella {TABLE_PS_GEO_COMUNE}: {e}"
+            )
+            df_comuni_new = pd.DataFrame(columns=["id_comune", "nome_comune"])
+
+        try:
+            df_stato_new = get_decodifica_options(
+                TABLE_PS_D_STATO_PIANO, "id_stato_piano", "descr_stato_piano"
+            )
+        except Exception as e:
+            st.error(
+                f"Errore nel caricamento degli stati piano dalla tabella {TABLE_PS_D_STATO_PIANO}: {e}"
+            )
+            df_stato_new = pd.DataFrame(
+                columns=["id_stato_piano", "descr_stato_piano"]
+            )
+
+        try:
+            df_tipo_piano_new = get_decodifica_options(
+                TABLE_PS_D_TIPO_PIANO, "id_tipo_piano", "descr_tipo_piano"
+            )
+        except Exception as e:
+            st.error(
+                f"Errore nel caricamento dei tipi piano dalla tabella {TABLE_PS_D_TIPO_PIANO}: {e}"
+            )
+            df_tipo_piano_new = pd.DataFrame(
+                columns=["id_tipo_piano", "descr_tipo_piano"]
+            )
+
+        try:
+            df_tipo_delibera_new = get_decodifica_options(
+                TABLE_PS_D_TIPO_DELIBERA, "id_tipo_delibera", "descr_tipo_delibera"
+            )
+        except Exception as e:
+            st.error(
+                f"Errore nel caricamento dei tipi delibera dalla tabella {TABLE_PS_D_TIPO_DELIBERA}: {e}"
+            )
+            df_tipo_delibera_new = pd.DataFrame(
+                columns=["id_tipo_delibera", "descr_tipo_delibera"]
+            )
+
+        with st.form("form_nuovo_piano", clear_on_submit=False):
+            if not df_comuni_new.empty:
+                comune_obj = st.selectbox(
+                    "Comune",
+                    options=list(df_comuni_new.itertuples(index=False)),
+                    format_func=lambda row: f"{row.id_comune} - {row.nome_comune}",
+                )
+                selected_id_comune_new = int(comune_obj.id_comune)
+            else:
+                st.warning(
+                    f"Nessun comune trovato nella tabella {TABLE_PS_GEO_COMUNE}."
+                )
+                selected_id_comune_new = None
+
+            if not df_stato_new.empty:
+                stato_obj = st.selectbox(
+                    "Stato piano",
+                    options=list(df_stato_new.itertuples(index=False)),
+                    format_func=lambda row: f"{row.id_stato_piano} - {row.descr_stato_piano}",
+                )
+                selected_id_stato_new = int(stato_obj.id_stato_piano)
+            else:
+                st.warning(
+                    f"Tabella {TABLE_PS_D_STATO_PIANO} vuota o non leggibile."
+                )
+                selected_id_stato_new = None
+
+            if not df_tipo_piano_new.empty:
+                tp_obj = st.selectbox(
+                    "Tipo piano",
+                    options=list(df_tipo_piano_new.itertuples(index=False)),
+                    format_func=lambda row: f"{row.id_tipo_piano} - {row.descr_tipo_piano}",
+                )
+                selected_id_tipo_piano_new = int(tp_obj.id_tipo_piano)
+            else:
+                st.warning(
+                    f"Tabella {TABLE_PS_D_TIPO_PIANO} vuota o non leggibile."
+                )
+                selected_id_tipo_piano_new = None
+
+            if not df_tipo_delibera_new.empty:
+                td_obj = st.selectbox(
+                    "Tipo delibera",
+                    options=list(df_tipo_delibera_new.itertuples(index=False)),
+                    format_func=lambda row: f"{row.id_tipo_delibera} - {row.descr_tipo_delibera}",
+                )
+                selected_id_tipo_delibera_new = int(td_obj.id_tipo_delibera)
+            else:
+                st.warning(
+                    f"Tabella {TABLE_PS_D_TIPO_DELIBERA} vuota o non leggibile."
+                )
+                selected_id_tipo_delibera_new = None
+
+            descrizione_piano_new = st.text_area(
+                "Descrizione del piano (ente)",
+                placeholder="Es. Comune di ... - Piano comunale di emergenza ...",
+            )
+            path_file_new = st.text_input(
+                "Percorso/URL del file del piano (opzionale)",
+                placeholder="Es. \\\\fileserver\\piani\\piano_comunale.pdf oppure https://...",
+            )
+            note_new = st.text_area("Note (opzionale)")
+
+            submit_piano_new = st.form_submit_button("Salva nuovo piano nel database")
+
+            if submit_piano_new:
+                if (
+                    selected_id_comune_new is None
+                    or selected_id_stato_new is None
+                    or selected_id_tipo_piano_new is None
+                    or selected_id_tipo_delibera_new is None
+                ):
+                    st.error(
+                        "Verifica che le tabelle di decodifica e dei comuni contengano dati "
+                        "e che le colonne usate nel codice corrispondano a quelle del DB."
+                    )
+                elif not descrizione_piano_new.strip():
+                    st.error("La descrizione del piano è obbligatoria.")
+                else:
+                    try:
+                        new_id = insert_piano_comunale(
+                            descrizione_piano=descrizione_piano_new.strip(),
+                            id_stato_piano=selected_id_stato_new,
+                            id_tipo_piano=selected_id_tipo_piano_new,
+                            id_tipo_delibera=selected_id_tipo_delibera_new,
+                            id_comune=selected_id_comune_new,
+                            path_file=path_file_new.strip() or None,
+                            note=note_new.strip() or None,
+                        )
+                        st.success(
+                            f"Piano inserito correttamente con id_piano = {new_id}."
+                        )
+                    except Exception as e:
+                        st.error(f"Errore durante l'inserimento del piano: {e}")
 
     st.markdown("---")
     with st.expander("🔧 Tabelle di base (solo per verifica dati)"):
