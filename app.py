@@ -154,6 +154,7 @@ def insert_piano_comunale(
     id_comune: int,
     path_file: str | None = None,
     note: str | None = None,
+    anno_approvazione: int | None = None,
     flg_vigente: bool = True,
 ) -> int:
     """Inserisce un piano comunale e la relazione con il comune."""
@@ -167,8 +168,8 @@ def insert_piano_comunale(
 
         insert_piano_query = (
             f"INSERT INTO {TABLE_PS_T_ANAGRAFICA_PC} "
-            "(fk_tipo_piano, fk_stato_piano, fk_delibera, path_file, note, flg_vigente, ente) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s) RETURNING id_modulo;"
+            "(fk_tipo_piano, fk_stato_piano, fk_delibera, path_file, note, flg_vigente, anno_approvazione, ente) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) RETURNING id_modulo;"
         )
 
         cursor.execute(
@@ -180,6 +181,7 @@ def insert_piano_comunale(
                 path_file,
                 note,
                 flg_vigente,
+                anno_approvazione,
                 descrizione_piano,
             ),
         )
@@ -216,6 +218,7 @@ def get_piano_dettaglio_by_id(id_piano: int) -> dict[str, object] | None:
             "  p.fk_delibera AS id_tipo_delibera, "
             "  p.path_file, "
             "  p.note, "
+            "  p.anno_approvazione AS anno_approvazione, "
             "  p.flg_vigente AS flg_vigente, "
             "  r.fk_comune AS id_comune "
             f"FROM {TABLE_PS_T_ANAGRAFICA_PC} p "
@@ -240,6 +243,7 @@ def update_piano_comunale(
     id_comune: int | None = None,
     path_file: str | None = None,
     note: str | None = None,
+    anno_approvazione: int | None = None,
     flg_vigente: bool = True,
 ) -> None:
     """Aggiorna un piano comunale esistente e la relazione con il comune."""
@@ -259,6 +263,7 @@ def update_piano_comunale(
             "    path_file = %s, "
             "    note = %s, "
             "    flg_vigente = %s, "
+            "    anno_approvazione = %s, "
             "    ente = %s "
             "WHERE id_modulo = %s"
         )
@@ -272,6 +277,7 @@ def update_piano_comunale(
                 path_file,
                 note,
                 flg_vigente,
+                anno_approvazione,
                 descrizione_piano,
                 id_piano,
             ),
@@ -436,6 +442,7 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
             "descr_stato_piano": "Stato piano",
             "descr_tipo_piano": "Tipo piano",
             "descr_tipo_delibera": "Tipo delibera",
+            "anno_approvazione": "Anno approvazione",
             "flg_vigente": "Vigente",
             "note": "Note",
         }
@@ -448,9 +455,9 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
                 return ""
             s = str(v).strip().upper()
             if s in ("S", "Y", "T", "TRUE", "1"):  # tipici valori "vero"
-                return "Sì"
+                return "S"
             if s in ("N", "F", "FALSE", "0"):  # tipici valori "falso"
-                return "No"
+                return "N"
             return str(v)
 
         df["Vigente"] = df["Vigente"].apply(_normalize_vigente)
@@ -471,6 +478,7 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
         "Stato piano",
         "Tipo piano",
         "Tipo delibera",
+        "Anno approvazione",
         "Vigente",
         "Note",
         "Path",
@@ -579,7 +587,7 @@ with tab_gestione:
         key="limit_piani_integrati",
     )
     filtro_testo = st.text_input(
-        "Filtro veloce (per testo presente in Piano o Comune)",
+        "Filtro veloce (ricerca testuale su tutti i campi)",
         "",
         key="filtro_piani_integrati",
     )
@@ -597,13 +605,12 @@ with tab_gestione:
 
             if filtro_testo.strip():
                 pattern = filtro_testo.strip()
-                mask = df_view["Piano"].astype(str).str.contains(
-                    pattern, case=False, na=False
+                # Ricerca case-insensitive su TUTTE le colonne, convertendo i valori a stringa
+                mask = (
+                    df_view.astype(str)
+                    .apply(lambda col: col.str.contains(pattern, case=False, na=False))
+                    .any(axis=1)
                 )
-                if "Comune" in df_view.columns:
-                    mask = mask | df_view["Comune"].astype(str).str.contains(
-                        pattern, case=False, na=False
-                    )
                 df_view = df_view[mask]
 
             df_view = df_view.reset_index(drop=True)
@@ -886,6 +893,21 @@ with tab_gestione:
                         key=f"edit_flg_vigente_{selected_piano_id}",
                     )
 
+                    anno_corrente = dati_piano.get("anno_approvazione")
+                    if anno_corrente is None or (isinstance(anno_corrente, float) and pd.isna(anno_corrente)):
+                        anno_str_default = ""
+                    else:
+                        try:
+                            anno_str_default = str(int(anno_corrente))
+                        except Exception:
+                            anno_str_default = str(anno_corrente)
+
+                    anno_approvazione_str = st.text_input(
+                        "Anno approvazione (AAAA, opzionale)",
+                        value=anno_str_default,
+                        key=f"edit_anno_approvazione_{selected_piano_id}",
+                    )
+
                     descrizione_nuova = st.text_area(
                         "Descrizione del piano (ente)",
                         value=str(dati_piano.get("descrizione_piano") or ""),
@@ -928,6 +950,7 @@ with tab_gestione:
                                     id_comune=id_comune_nuovo,
                                     path_file=path_nuovo.strip() or None,
                                     note=note_nuove.strip() or None,
+                                    anno_approvazione=anno_approvazione_str.strip() or None,
                                     flg_vigente=flg_vigente_nuovo,
                                 )
                                 st.success(
@@ -1045,6 +1068,10 @@ with tab_gestione:
                 "Percorso/URL del file del piano (opzionale)",
                 placeholder="Es. \\\\fileserver\\piani\\piano_comunale.pdf oppure https://...",
             )
+            anno_approvazione_new = st.text_input(
+                "Anno approvazione (AAAA, opzionale)",
+                placeholder="Es. 2024",
+            )
             flg_vigente_new = st.checkbox(
                 "Piano vigente",
                 value=True,
@@ -1076,6 +1103,7 @@ with tab_gestione:
                             id_comune=selected_id_comune_new,
                             path_file=path_file_new.strip() or None,
                             note=note_new.strip() or None,
+                            anno_approvazione=anno_approvazione_new.strip() or None,
                             flg_vigente=flg_vigente_new,
                         )
                         st.success(
