@@ -441,6 +441,20 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
         }
     )
 
+    # Normalizza il flag di vigenza per la visualizzazione in tabella
+    if "Vigente" in df.columns:
+        def _normalize_vigente(v: object) -> str:
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                return ""
+            s = str(v).strip().upper()
+            if s in ("S", "Y", "T", "TRUE", "1"):  # tipici valori "vero"
+                return "Sì"
+            if s in ("N", "F", "FALSE", "0"):  # tipici valori "falso"
+                return "No"
+            return str(v)
+
+        df["Vigente"] = df["Vigente"].apply(_normalize_vigente)
+
     path_col = None
     for c in df.columns:
         if "path" in c.lower() or "url" in c.lower():
