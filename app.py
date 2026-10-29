@@ -20,15 +20,17 @@ DB_PASS = os.getenv("DB_PASS", "password")  # Cambia subito questo valore
 DB_PORT = int(os.getenv("DB_PORT", "5432"))
 
 # -----------------------------------------------------------
-# NOMI TABELLE (minuscolo per corrispondere al DB PostgreSQL)
+# NOMI TABELLE E SCHEMA (minuscolo per corrispondere al DB PostgreSQL)
 # -----------------------------------------------------------
-TABLE_PS_T_ANAGRAFICA_PC = "ps_t_anagrafica_pc"
-TABLE_PS_D_STATO_PIANO = "ps_d_stato_piano"
-TABLE_PS_D_TIPO_PIANO = "ps_d_tipo_piano"
-TABLE_PS_D_TIPO_DELIBERA = "ps_d_tipo_delibera"
-TABLE_PS_GEO_COMUNE = "ps_geo_comune"
-TABLE_PS_R_PIANO_COMUNE = "ps_r_piano_comune"
-TABLE_PS_R_TM_TP = "ps_r_tm_tp"
+TABLE_SCHEMA = "peser"  # schema PostgreSQL che contiene le tabelle PESER
+
+TABLE_PS_T_ANAGRAFICA_PC = f"{TABLE_SCHEMA}.ps_t_anagrafica_pc"
+TABLE_PS_D_STATO_PIANO = f"{TABLE_SCHEMA}.ps_d_stato_piano"
+TABLE_PS_D_TIPO_PIANO = f"{TABLE_SCHEMA}.ps_d_tipo_piano"
+TABLE_PS_D_TIPO_DELIBERA = f"{TABLE_SCHEMA}.ps_d_tipo_delibera"
+TABLE_PS_GEO_COMUNE = f"{TABLE_SCHEMA}.ps_geo_comune"
+TABLE_PS_R_PIANO_COMUNE = f"{TABLE_SCHEMA}.ps_r_piano_comune"
+TABLE_PS_R_TM_TP = f"{TABLE_SCHEMA}.ps_r_tm_tp"
 
 
 # -----------------------------------------------------------
@@ -382,17 +384,46 @@ def get_relazioni_piano_comune() -> pd.DataFrame:
 
 
 def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
-    """Restituisce una vista integrata dei piani comunali senza modificare il path."""
+    """Restituisce una vista integrata dei piani comunali basata sulla relazione piano-comune.
 
-    df_piani = get_last_piani(limit=limit)
+    Usa ps_r_piano_comune come sorgente principale, filtrando i record con flg_vigente = 'S'
+    (come nella query SQL che usi), e unendo l'anagrafica e le tabelle di decodifica.
+    """
+
+    # Carica direttamente dal DB i piani collegati ai comuni, filtrando sulla vigenza
+    conn = None
+    try:
+        conn = get_connection()
+        query = (
+            "SELECT "
+            "  p.id_modulo AS id_piano, "
+            "  p.ente AS descrizione_piano, "
+            "  p.fk_stato_piano AS id_stato_piano, "
+            "  p.fk_tipo_piano AS id_tipo_piano, "
+            "  p.fk_delibera AS id_tipo_delibera, "
+            "  p.path_file, "
+            "  p.note, "
+            "  p.dt_delibera, "
+            "  p.num_delibera, "
+            "  p.anno_approvazione, "
+            "  p.flg_vigente, "
+            "  p.dt_aggiornamento, "
+            "  r.fk_comune AS id_comune "
+            f"FROM {TABLE_PS_T_ANAGRAFICA_PC} p "
+            f"JOIN {TABLE_PS_R_PIANO_COMUNE} r ON r.fk_modulo = p.id_modulo "
+            "WHERE UPPER(TRIM(COALESCE(r.flg_vigente, ''))) = 'S' "
+            "ORDER BY p.id_modulo DESC "
+            "LIMIT %s"
+        )
+        df_piani = pd.read_sql_query(query, conn, params=(limit,))
+    finally:
+        if conn is not None:
+            conn.close()
+
     if df_piani.empty:
         return df_piani
 
-    try:
-        df_rel = get_relazioni_piano_comune()
-    except Exception:
-        df_rel = pd.DataFrame(columns=["id_piano", "id_comune"])
-
+    # Tabelle di supporto per descrizioni e nome del comune
     try:
         df_comuni = get_comuni()
     except Exception:
@@ -421,7 +452,8 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
             columns=["id_tipo_delibera", "descr_tipo_delibera"]
         )
 
-    df = df_piani.merge(df_rel, on="id_piano", how="left")
+    # DataFrame base
+    df = df_piani.copy()
 
     if not df_comuni.empty:
         df = df.merge(df_comuni, on="id_comune", how="left")
