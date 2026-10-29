@@ -367,13 +367,15 @@ def get_last_piani(limit: int = 50) -> pd.DataFrame:
 
 
 def get_relazioni_piano_comune() -> pd.DataFrame:
-    """Restituisce la relazione piano-comune (id_piano, id_comune)."""
+    """Restituisce la relazione piano-comune (id_piano, id_comune, flg_vigente_relazione)."""
 
     conn = None
     try:
         conn = get_connection()
         query = (
-            f"SELECT fk_modulo AS id_piano, fk_comune AS id_comune "
+            f"SELECT fk_modulo AS id_piano, "
+            f"       fk_comune AS id_comune, "
+            f"       flg_vigente AS flg_vigente_relazione "
             f"FROM {TABLE_PS_R_PIANO_COMUNE}"
         )
         df = pd.read_sql_query(query, conn)
@@ -384,46 +386,22 @@ def get_relazioni_piano_comune() -> pd.DataFrame:
 
 
 def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
-    """Restituisce una vista integrata dei piani comunali basata sulla relazione piano-comune.
+    """Restituisce una vista integrata dei piani comunali senza modificare il path.
 
-    Usa ps_r_piano_comune come sorgente principale, filtrando i record con flg_vigente = 'S'
-    (come nella query SQL che usi), e unendo l'anagrafica e le tabelle di decodifica.
+    Usa come base tutti i piani da ps_t_anagrafica_pc (get_last_piani) e tutte le
+    relazioni da ps_r_piano_comune (get_relazioni_piano_comune), ma per la colonna
+    "Vigente" dà priorità al flag di vigenza della relazione se presente.
     """
 
-    # Carica direttamente dal DB i piani collegati ai comuni, filtrando sulla vigenza
-    conn = None
-    try:
-        conn = get_connection()
-        query = (
-            "SELECT "
-            "  p.id_modulo AS id_piano, "
-            "  p.ente AS descrizione_piano, "
-            "  p.fk_stato_piano AS id_stato_piano, "
-            "  p.fk_tipo_piano AS id_tipo_piano, "
-            "  p.fk_delibera AS id_tipo_delibera, "
-            "  p.path_file, "
-            "  p.note, "
-            "  p.dt_delibera, "
-            "  p.num_delibera, "
-            "  p.anno_approvazione, "
-            "  p.flg_vigente, "
-            "  p.dt_aggiornamento, "
-            "  r.fk_comune AS id_comune "
-            f"FROM {TABLE_PS_T_ANAGRAFICA_PC} p "
-            f"JOIN {TABLE_PS_R_PIANO_COMUNE} r ON r.fk_modulo = p.id_modulo "
-            "WHERE UPPER(TRIM(COALESCE(r.flg_vigente, ''))) = 'S' "
-            "ORDER BY p.id_modulo DESC "
-            "LIMIT %s"
-        )
-        df_piani = pd.read_sql_query(query, conn, params=(limit,))
-    finally:
-        if conn is not None:
-            conn.close()
-
+    df_piani = get_last_piani(limit=limit)
     if df_piani.empty:
         return df_piani
 
-    # Tabelle di supporto per descrizioni e nome del comune
+    try:
+        df_rel = get_relazioni_piano_comune()
+    except Exception:
+        df_rel = pd.DataFrame(columns=["id_piano", "id_comune", "flg_vigente_relazione"])
+
     try:
         df_comuni = get_comuni()
     except Exception:
@@ -452,8 +430,8 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
             columns=["id_tipo_delibera", "descr_tipo_delibera"]
         )
 
-    # DataFrame base
-    df = df_piani.copy()
+    # Base: piani anagrafici + relazioni piano-comune (una riga per relazione)
+    df = df_piani.merge(df_rel, on="id_piano", how="left")
 
     if not df_comuni.empty:
         df = df.merge(df_comuni, on="id_comune", how="left")
@@ -467,18 +445,26 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
     if not df_tipo_delibera.empty:
         df = df.merge(df_tipo_delibera, on="id_tipo_delibera", how="left")
 
-    df = df.rename(
-        columns={
-            "descrizione_piano": "Piano",
-            "nome_comune": "Comune",
-            "descr_stato_piano": "Stato piano",
-            "descr_tipo_piano": "Tipo piano",
-            "descr_tipo_delibera": "Tipo delibera",
-            "anno_approvazione": "Anno approvazione",
-            "flg_vigente": "Vigente",
-            "note": "Note",
-        }
-    )
+    # Decidi da quale colonna prendere il flag di vigenza: preferisci la relazione
+    vigente_source_col: str | None = None
+    if "flg_vigente_relazione" in df.columns and not df["flg_vigente_relazione"].isna().all():
+        vigente_source_col = "flg_vigente_relazione"
+    elif "flg_vigente" in df.columns:
+        vigente_source_col = "flg_vigente"
+
+    rename_map: dict[str, str] = {
+        "descrizione_piano": "Piano",
+        "nome_comune": "Comune",
+        "descr_stato_piano": "Stato piano",
+        "descr_tipo_piano": "Tipo piano",
+        "descr_tipo_delibera": "Tipo delibera",
+        "anno_approvazione": "Anno approvazione",
+        "note": "Note",
+    }
+    if vigente_source_col is not None:
+        rename_map[vigente_source_col] = "Vigente"
+
+    df = df.rename(columns=rename_map)
 
     # Normalizza il flag di vigenza per la visualizzazione in tabella
     if "Vigente" in df.columns:
