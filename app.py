@@ -159,7 +159,12 @@ def insert_piano_comunale(
     anno_approvazione: int | None = None,
     flg_vigente: bool = True,
 ) -> int:
-    """Inserisce un piano comunale e la relazione con il comune."""
+    """Inserisce un piano comunale e la relazione con il comune.
+
+    La vigenza viene salvata:
+    - sull'anagrafica (ps_t_anagrafica_pc.flg_vigente)
+    - sulla relazione (ps_r_piano_comune.flg_vigente, come 'S'/'N')
+    """
 
     conn = None
     cursor = None
@@ -190,11 +195,14 @@ def insert_piano_comunale(
 
         id_piano = cursor.fetchone()[0]
 
+        # Flag di vigenza per la relazione (S/N)
+        rel_flag = "S" if flg_vigente else "N"
+
         insert_rel_query = (
-            f"INSERT INTO {TABLE_PS_R_PIANO_COMUNE} (fk_modulo, fk_comune) "
-            "VALUES (%s, %s);"
+            f"INSERT INTO {TABLE_PS_R_PIANO_COMUNE} (fk_modulo, fk_comune, flg_vigente) "
+            "VALUES (%s, %s, %s);"
         )
-        cursor.execute(insert_rel_query, (id_piano, id_comune))
+        cursor.execute(insert_rel_query, (id_piano, id_comune, rel_flag))
 
         conn.commit()
         return id_piano
@@ -206,7 +214,10 @@ def insert_piano_comunale(
 
 
 def get_piano_dettaglio_by_id(id_piano: int) -> dict[str, object] | None:
-    """Restituisce i dati di un singolo piano (più il comune associato)."""
+    """Restituisce i dati di un singolo piano (più il comune associato).
+
+    Include sia i dati anagrafici sia quelli della relazione (id_piano_comune, flg_vigente_relazione).
+    """
 
     conn = None
     try:
@@ -221,8 +232,10 @@ def get_piano_dettaglio_by_id(id_piano: int) -> dict[str, object] | None:
             "  p.path_file, "
             "  p.note, "
             "  p.anno_approvazione AS anno_approvazione, "
-            "  p.flg_vigente AS flg_vigente, "
-            "  r.fk_comune AS id_comune "
+            "  p.flg_vigente AS flg_vigente_anagrafica, "
+            "  r.fk_comune AS id_comune, "
+            "  r.id_piano_comune AS id_piano_comune, "
+            "  r.flg_vigente AS flg_vigente_relazione "
             f"FROM {TABLE_PS_T_ANAGRAFICA_PC} p "
             f"LEFT JOIN {TABLE_PS_R_PIANO_COMUNE} r ON r.fk_modulo = p.id_modulo "
             "WHERE p.id_modulo = %s"
@@ -295,18 +308,21 @@ def update_piano_comunale(
             )
             count_rel = cursor.fetchone()[0]
 
+            # Flag di vigenza per la relazione (S/N) basato su flg_vigente passato alla funzione
+            rel_flag = "S" if flg_vigente else "N"
+
             if count_rel and count_rel > 0:
                 cursor.execute(
                     f"UPDATE {TABLE_PS_R_PIANO_COMUNE} "
-                    "SET fk_comune = %s "
+                    "SET fk_comune = %s, flg_vigente = %s "
                     "WHERE fk_modulo = %s",
-                    (id_comune, id_piano),
+                    (id_comune, rel_flag, id_piano),
                 )
             else:
                 cursor.execute(
-                    f"INSERT INTO {TABLE_PS_R_PIANO_COMUNE} (fk_modulo, fk_comune) "
-                    "VALUES (%s, %s)",
-                    (id_piano, id_comune),
+                    f"INSERT INTO {TABLE_PS_R_PIANO_COMUNE} (fk_modulo, fk_comune, flg_vigente) "
+                    "VALUES (%s, %s, %s)",
+                    (id_piano, id_comune, rel_flag),
                 )
 
         conn.commit()
@@ -367,7 +383,12 @@ def get_last_piani(limit: int = 50) -> pd.DataFrame:
 
 
 def get_relazioni_piano_comune() -> pd.DataFrame:
-    """Restituisce la relazione piano-comune (id_piano, id_comune, flg_vigente_relazione)."""
+    """Restituisce la relazione piano-comune con ID anagrafica, ID relazione e vigenza.
+
+    - id_piano           -> id_modulo del piano (ps_t_anagrafica_pc.id_modulo)
+    - id_piano_comune    -> id della relazione piano-comune (ps_r_piano_comune.id_piano_comune)
+    - flg_vigente_relazione -> flag di vigenza della relazione (ps_r_piano_comune.flg_vigente)
+    """
 
     conn = None
     try:
@@ -375,6 +396,7 @@ def get_relazioni_piano_comune() -> pd.DataFrame:
         query = (
             f"SELECT fk_modulo AS id_piano, "
             f"       fk_comune AS id_comune, "
+            f"       id_piano_comune AS id_piano_comune, "
             f"       flg_vigente AS flg_vigente_relazione "
             f"FROM {TABLE_PS_R_PIANO_COMUNE}"
         )
@@ -388,9 +410,14 @@ def get_relazioni_piano_comune() -> pd.DataFrame:
 def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
     """Restituisce una vista integrata dei piani comunali senza modificare il path.
 
-    Usa come base tutti i piani da ps_t_anagrafica_pc (get_last_piani) e tutte le
-    relazioni da ps_r_piano_comune (get_relazioni_piano_comune), ma per la colonna
-    "Vigente" dà priorità al flag di vigenza della relazione se presente.
+    Base dati:
+    - ps_t_anagrafica_pc (get_last_piani) per i dati del modulo/piano
+    - ps_r_piano_comune (get_relazioni_piano_comune) per ID relazione e flag di vigenza
+
+    Nella vista:
+    - "id_piano" rappresenta l'id_modulo (anagrafica)
+    - "id_piano_comune" rappresenta l'id della relazione piano-comune
+    - "Vigente" usa SEMPRE il flag della relazione ps_r_piano_comune.flg_vigente
     """
 
     df_piani = get_last_piani(limit=limit)
@@ -400,7 +427,7 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
     try:
         df_rel = get_relazioni_piano_comune()
     except Exception:
-        df_rel = pd.DataFrame(columns=["id_piano", "id_comune", "flg_vigente_relazione"])
+        df_rel = pd.DataFrame(columns=["id_piano", "id_comune", "id_piano_comune", "flg_vigente_relazione"])
 
     try:
         df_comuni = get_comuni()
@@ -445,13 +472,7 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
     if not df_tipo_delibera.empty:
         df = df.merge(df_tipo_delibera, on="id_tipo_delibera", how="left")
 
-    # Decidi da quale colonna prendere il flag di vigenza: preferisci la relazione
-    vigente_source_col: str | None = None
-    if "flg_vigente_relazione" in df.columns and not df["flg_vigente_relazione"].isna().all():
-        vigente_source_col = "flg_vigente_relazione"
-    elif "flg_vigente" in df.columns:
-        vigente_source_col = "flg_vigente"
-
+    # Usa SEMPRE il flag di vigenza della relazione
     rename_map: dict[str, str] = {
         "descrizione_piano": "Piano",
         "nome_comune": "Comune",
@@ -461,8 +482,8 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
         "anno_approvazione": "Anno approvazione",
         "note": "Note",
     }
-    if vigente_source_col is not None:
-        rename_map[vigente_source_col] = "Vigente"
+    if "flg_vigente_relazione" in df.columns:
+        rename_map["flg_vigente_relazione"] = "Vigente"
 
     df = df.rename(columns=rename_map)
 
@@ -489,7 +510,8 @@ def get_piani_dettaglio(limit: int = 100) -> pd.DataFrame:
         df = df.rename(columns={path_col: "Path"})
 
     ordered_cols = [
-        "id_piano",
+        "id_piano_comune",  # id relazione piano-comune (ps_r_piano_comune.id_piano_comune)
+        "id_piano",         # id modulo/piano (ps_t_anagrafica_pc.id_modulo)
         "Piano",
         "Comune",
         "id_comune",
@@ -648,6 +670,21 @@ with tab_gestione:
                 help="Seleziona il piano su cui lavorare",
                 default=False,
             )
+
+            # Etichette leggibili per ID modulo e ID relazione
+            if "id_piano" in df_view_display.columns:
+                column_config["id_piano"] = st.column_config.NumberColumn(
+                    "ID modulo",
+                    help="Identificativo del modulo/piano (ps_t_anagrafica_pc.id_modulo)",
+                )
+            if "id_piano_comune" in df_view_display.columns:
+                column_config["id_piano_comune"] = st.column_config.NumberColumn(
+                    "ID piano comune",
+                    help=(
+                        "Identificativo della relazione piano-comune "
+                        "(ps_r_piano_comune.id_piano_comune)"
+                    ),
+                )
 
             df_view_edit = st.data_editor(
                 df_view_display,
@@ -893,7 +930,8 @@ with tab_gestione:
                             else None
                         )
 
-                    flg_vigente_corrente = dati_piano.get("flg_vigente")
+                    # Usa SEMPRE il flag di vigenza della relazione piano-comune
+                    flg_vigente_corrente = dati_piano.get("flg_vigente_relazione")
                     if isinstance(flg_vigente_corrente, str):
                         flg_vigente_default = flg_vigente_corrente.strip().upper() in (
                             "S",
